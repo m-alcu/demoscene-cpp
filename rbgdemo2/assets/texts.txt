@@ -1,0 +1,89 @@
+ 
+welcome to
+black glass )(
+another renaissance production
+yeah, it does look like black glass 1...
+but what would be the sense of calling
+it rbgdemo2 if it didnt...?
+anyways, this is the first public debut
+of our fm digital combo muzik driver...
+we figure there was a whole good fm chip
+on that sb you got... so why waste it?
+first lets get the credits done
+code and grafix by
+tran
+muziks by
+mosaic and c.c.catch
+thanx to radioisotope for this kool font
+anyways, as for renaissance...
+our membership is down to 4 basic people...
+one coder, tran
+(that be me)
+two musicians,
+c.c.catch and mosaic
+and our sysop and distributor,
+daredevil
+we havent released anything l8tly
+for a few reasons...
+first we started really getting into k2
+(which will be out sometime)
+but then decided that the old muzik system
+wasnt good enough, this was the perfect
+time to do the new digital fm muzik driver
+ive had on my mind for awhile before
+so off i went on another multi thousand line
+slightly complex driver coding adventure...
+at this time my sbpro was dead, so i was
+coding blind and progress was slow...
+once the nice people at creative labs
+replaced my sbp and the driver was done,
+it was on to a composer for this new
+type of muzik...
+that was done then, and it was back
+to k2 for awhile again...
+but the need arose for a demo or something.
+and since i already had many of the routines
+for this type of demo,
+it was the logical choice for the quickie...
+anyways, now about this demo...
+its pretty much like the first
+but there are alot of new k00l objects.
+the old objects are also included...
+(you might wanna see em in the new modez?)
+this is not just a demo though...
+it is also a player for our new 670 format
+digital fm muzik filez...
+you can specify the 670 file to be played
+on the command line. the default muzik is
+muzik0.670 by mosaic... this one shows off
+the digital channels better than muzik1.670
+muzik1 is a very nice piece by c.c.catch...
+it uses only one digital instrument though...
+this is because c.cs hardcard died...
+he lost all his digital instruments,
+and is running without an hd right now...
+we will probably release some more k00l
+670s for your listening pleasure soon...
+here are some keys in this demo
+the spacebar changes modez...
+you can contact us on the sound barrier bbs...
+(718).979.6629
+or some of the other boardz we frequent
+here in new york...
+greets go out to
+mcgarret genesis and our
+other friends in europe...
+sami tammilehto and future crew...
+and ofcourse all our friends around here
+(you know who you are)
+why the wintery theme for this demo
+in the middle of summer 92?
+why not? it looks k00l...
+if ya got an adlib, you get normal fm
+with an sb, its 4 digital and fm
+and with an sbp (with the old fm chips)
+you get 4 digital and incredible fm
+left and right arrow keys change objects...
+enter toggles object change...
+when this text runs out
+press f1 to see it again
