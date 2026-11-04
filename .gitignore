@@ -1,0 +1,2 @@
+# CMake build trees (build/, build-dbg/, build-rel/, ...)
+build*/
