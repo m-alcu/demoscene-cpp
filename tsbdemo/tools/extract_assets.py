@@ -2,7 +2,7 @@
 
 Usage: python3 -I tools/extract_assets.py <TSBDEMO1.unpacked.bin> <assets dir>
 
-The unpacked image is ../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bin. Every
+The unpacked image is ../../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bin. Every
 offset below comes from the original's own code (segment 1030h, the video
 routines at 0C97h..13F3h), not from screenshots:
 

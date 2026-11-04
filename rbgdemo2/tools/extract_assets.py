@@ -2,8 +2,8 @@
 
 Usage: python3 -I tools/extract_assets.py <rbgdemo2.unpacked.bin> <muzik dir> <project dir>
 
-The unpacked image is ../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bin (the
-PKLITE stub of RBGDEMO2.EXE run to completion, see ../rea/tsbdemo1-analisis).
+The unpacked image is ../../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bin (the
+PKLITE stub of RBGDEMO2.EXE run to completion, see ../../rea/tsbdemo1-analisis).
 The program is a real-mode stub plus a 32-bit protected-mode part whose code
 and data selectors both have base linear 10580h, that is image offset 580h.
 Every offset below is such a 32-bit offset ("c32"), read from the code that

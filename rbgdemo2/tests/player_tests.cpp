@@ -1,7 +1,7 @@
 // Checks the .670 player against the original driver.
 //
 // tests/data/muzik0_ref.bin was recorded from the original RBGDEMO2 running
-// under ../rea/rbgdemo2-analisis/emu386.py: for each SB interrupt after the
+// under ../../rea/rbgdemo2-analisis/emu386.py: for each SB interrupt after the
 // song starts, the 140-byte block the DSP was given and every OPL write the
 // interrupt made. Records: 'T' u32 tick, 140 bytes; 'O' chip reg val.
 #include <cmath>

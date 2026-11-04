@@ -6,7 +6,7 @@ Preacher, music Nobody, PMODE by Tran). It is a translation of the
 program, not a remake. The intro and its music player are translated
 routine by routine and checked against the original frame by frame and GUS
 write by GUS write. The original ran under an emulation harness in
-`../rea/drift-analisis`.
+`../../rea/drift-analisis`.
 
 ## Building and running
 

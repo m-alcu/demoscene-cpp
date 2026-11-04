@@ -1,5 +1,5 @@
 // The port checked against the original, as the analysis harness in
-// ../rea/drift-analisis ran it (tests/data, from make_test_ref.py there):
+// ../../rea/drift-analisis ran it (tests/data, from make_test_ref.py there):
 //
 //  - full.bin: a CRC-32 of the picture (the plane bytes the CRTC reads)
 //    and of the DAC for each frame (70 Hz) from where the port's program

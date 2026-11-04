@@ -1,5 +1,5 @@
 // The port checked against the original, as the analysis harness in
-// ../rea/cyboman2-analisis ran it (tests/data, from make_test_ref.py there):
+// ../../rea/cyboman2-analisis ran it (tests/data, from make_test_ref.py there):
 //
 //  - full.bin: a CRC-32 of the screen and of the DAC for each of the 13650
 //    frames (70 Hz) the intro shows from its start to its end;

@@ -2,7 +2,7 @@
 // player checked for sense.
 //
 // tests/data/end_crc.bin and esc_crc.bin hold a CRC-32 per retrace of what
-// the original showed under the harness in ../rea/appeal-analisis (retrace,
+// the original showed under the harness in ../../rea/appeal-analisis (retrace,
 // volume, DAC, screen): run to the end, and with Esc pressed at retrace 1500.
 //
 // Usage: hexappeal_tests <project dir>

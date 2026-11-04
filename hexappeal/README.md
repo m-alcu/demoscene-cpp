@@ -211,7 +211,7 @@ Nothing is redrawn or re-entered by hand. `tools/extract_assets.py` takes it
 all from APPEAL.EXE, at offsets read from the code that uses them:
 
 ```bash
-python3 -I tools/extract_assets.py ../rea/DEMOS/appeal/appeal.exe .
+python3 -I tools/extract_assets.py ../../rea/DEMOS/appeal/appeal.exe .
 ```
 
 - `libertine.mod` the module, unchanged.
@@ -225,7 +225,7 @@ python3 -I tools/extract_assets.py ../rea/DEMOS/appeal/appeal.exe .
 ## Verification
 
 The end part was run under a real-mode emulator harness in
-`../rea/appeal-analisis`. It is Unicorn standing in for DOS, the music
+`../../rea/appeal-analisis`. It is Unicorn standing in for DOS, the music
 system's `int 80h` and the VGA, and it records the screen, the DAC and the
 volume after every retrace.
 

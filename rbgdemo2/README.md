@@ -110,11 +110,11 @@ mono buffer at 8000 Hz, with 16 volume tables.
 
 Nothing here is redrawn or re-entered by hand. `tools/extract_assets.py`
 takes it all from the unpacked executable
-(`../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bin`), at offsets read from the
+(`../../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bin`), at offsets read from the
 code that uses them:
 
 ```bash
-python3 -I tools/extract_assets.py ../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bin ../rea/rgbdemo2 .
+python3 -I tools/extract_assets.py ../../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bin ../../rea/rgbdemo2 .
 ```
 
 - `background.bmp` the 320x200 scene, `balls.bmp` the eight modes' ball
@@ -131,13 +131,13 @@ python3 -I tools/extract_assets.py ../rea/rbgdemo2-analisis/rbgdemo2.unpacked.bi
 ## Verification
 
 The original was run under the 386 emulator harness in
-`../rea/rbgdemo2-analisis` (Unicorn plus planar VGA, PIC, PIT, DMA,
+`../../rea/rbgdemo2-analisis` (Unicorn plus planar VGA, PIC, PIT, DMA,
 SoundBlaster and OPL ports), recording the page shown and the DAC at every
 flip, and every OPL write and DMA block of every music tick.
 
 - **Video.** The port's frames, dumped the same way, are identical to the
   original's: pixels and DAC, frame for frame, over 1175 frames untouched and 3300 frames with object, mode and Enter keys (see
-  `../rea/rbgdemo2-analisis/README.md` for which).
+  `../../rea/rbgdemo2-analisis/README.md` for which).
 - **Music.** `tests/player_tests.cpp` replays the reference: the driver's
   OPL writes and its 140-byte digital blocks match the original's exactly,
   tick for tick (2000 ticks of `muzik0.670`, 303 of `muzik1.670`).

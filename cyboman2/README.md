@@ -6,7 +6,7 @@ Complex's 64K intro from The Party '94: code JMagic, objects Reward, music
 translation of the program, not a remake. The intro and its music replay are
 translated routine by routine and checked against the original frame by frame
 and GUS write by GUS write. The original ran under an emulation harness in
-`../rea/cyboman2-analisis`.
+`../../rea/cyboman2-analisis`.
 
 ## Building and running
 

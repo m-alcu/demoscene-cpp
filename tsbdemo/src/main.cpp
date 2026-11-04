@@ -8,7 +8,7 @@
 //
 // The graphics in assets/ were extracted from the original executable by
 // tools/extract_assets.py; the music in assets/music.669 was reconstructed
-// from the original player. See ../rea/tsbdemo1-analisis/README.md for how.
+// from the original player. See ../../rea/tsbdemo1-analisis/README.md for how.
 #include <SDL3/SDL.h>
 
 #include <cstdlib>

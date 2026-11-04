@@ -67,11 +67,11 @@ half a pixel a tick, 60 at one, 40 at two, 20 at four.
 
 Nothing here is a re-drawing by hand. `tools/extract_assets.py` takes every
 graphic straight out of the unpacked executable
-(`../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bin`), at offsets read from the
+(`../../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bin`), at offsets read from the
 code that loads them:
 
 ```bash
-python3 -I tools/extract_assets.py ../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bin assets
+python3 -I tools/extract_assets.py ../../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bin assets
 ```
 
 - **`logo.bmp`**, **`nebula.bmp`**: the two 320x200 pictures, upper and lower.
@@ -93,12 +93,12 @@ python3 -I tools/extract_assets.py ../rea/tsbdemo1-analisis/TSBDEMO1.unpacked.bi
   original's mixer did, because its own format is proprietary and
   undocumented. Simulated tick by tick against the mixer trace, it plays the
   same voices except for single ticks at note ends; see section 6 of
-  `../rea/tsbdemo1-analisis/README.md`.
+  `../../rea/tsbdemo1-analisis/README.md`.
 
 ## Verification
 
 The replica was compared pixel by pixel against the original running in the
-8086 emulator of `../rea/tsbdemo1-analisis`, with the emulator's screen
+8086 emulator of `../../rea/tsbdemo1-analisis`, with the emulator's screen
 composed the way the CRT does it (400 lines, split at line compare). Excluding
 star pixels, the scroll and both text pages compared were identical; the stars
 themselves matched in all four groups.
