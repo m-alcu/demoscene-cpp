@@ -2,6 +2,7 @@
 #include <SDL3/SDL.h>
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_sdlrenderer3.h"
+#include <filesystem>
 
 // Color palette helper
 static ImVec4 rgb(int r, int g, int b, float a = 1.0f) {
@@ -105,26 +106,113 @@ void imguiEndFrame(SDL_Renderer* renderer) {
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
 }
 
-void drawUI(UIState& state) {
+void drawUI(UIState& state, FileLoadCallback on_file_selected,
+            DirChangeCallback on_dir_selected) {
     // Info panel
     if (state.show_info) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(350, 300), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Información", &state.show_info, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::SetNextWindowSize(ImVec2(400, 350), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Información", &state.show_info)) {
             ImGui::Text("Archivo: %s", state.loaded_file.c_str());
+            
+            if (state.current_file_index >= 0 && !state.files_in_dir.empty()) {
+                ImGui::Text("Posición: %d / %zu", state.current_file_index + 1, state.files_in_dir.size());
+            }
+            
             ImGui::Separator();
+            ImGui::LabelText("Formato", "%s", state.image_format.c_str());
             ImGui::LabelText("Resolución", "%dx%d", state.image_width, state.image_height);
-            ImGui::LabelText("Planos", "%d", state.num_planes);
-            ImGui::LabelText("Colores", "%d", state.num_colors);
-            ImGui::End();
+            if (state.image_format == "LBM") {
+                ImGui::LabelText("Planos", "%d", state.num_planes);
+            } else {
+                ImGui::LabelText("Bits/píxel", "%d", state.num_planes);
+            }
+            if (state.num_colors > 0) {
+                ImGui::LabelText("Colores", "%d", state.num_colors);
+            } else {
+                ImGui::LabelText("Colores", "color real");
+            }
+            
+            ImGui::Separator();
+            if (!state.files_in_dir.empty()) {
+                ImGui::Text("Navegación:");
+                if (ImGui::Button("← Anterior (P)")) {
+                    // Navegación será controlada por teclas
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Siguiente (N) →")) {
+                    // Navegación será controlada por teclas
+                }
+            }
         }
+        ImGui::End();
+    }
+
+    // Files panel with list
+    if (state.show_files && !state.current_directory.empty()) {
+        ImGui::SetNextWindowPos(ImVec2(420, 10), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(500, 700), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Archivos (L)", &state.show_files)) {
+            ImGui::TextWrapped("%s", state.current_directory.c_str());
+            ImGui::Text("%zu carpetas, %zu imágenes",
+                        state.subdirs.size(), state.files_in_dir.size());
+            ImGui::Separator();
+
+            // Las acciones se aplican tras dibujar la lista, porque cambian los vectores
+            std::string pending_dir;
+            int pending_file = -1;
+            static const ImVec4 dir_color = rgb(240, 200, 100);
+
+            if (ImGui::BeginListBox("##FilesListBox", ImVec2(-1, -40))) {
+                if (state.has_parent) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, dir_color);
+                    if (ImGui::Selectable("[..] Subir")) {
+                        pending_dir = std::filesystem::path(state.current_directory).parent_path().string();
+                    }
+                    ImGui::PopStyleColor();
+                }
+
+                ImGui::PushStyleColor(ImGuiCol_Text, dir_color);
+                for (const auto& dir : state.subdirs) {
+                    std::string label = "[DIR] " + std::filesystem::path(dir).filename().string() + "/";
+                    if (ImGui::Selectable(label.c_str())) {
+                        pending_dir = dir;
+                    }
+                }
+                ImGui::PopStyleColor();
+
+                for (int i = 0; i < (int)state.files_in_dir.size(); ++i) {
+                    std::string filename = std::filesystem::path(state.files_in_dir[i]).filename().string();
+                    bool is_selected = (i == state.current_file_index);
+
+                    if (ImGui::Selectable(filename.c_str(), is_selected)) {
+                        pending_file = i;
+                    }
+
+                    // Scroll al archivo actual
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndListBox();
+            }
+
+            ImGui::TextDisabled("Clic en carpeta para entrar, Backspace para subir");
+
+            if (!pending_dir.empty() && on_dir_selected) {
+                on_dir_selected(pending_dir);
+            } else if (pending_file >= 0 && on_file_selected) {
+                on_file_selected(pending_file);
+            }
+        }
+        ImGui::End();
     }
 
     // Controls panel
     if (state.show_controls) {
-        ImGui::SetNextWindowPos(ImVec2(10, 320), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(350, 250), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Controles", &state.show_controls, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::SetNextWindowPos(ImVec2(10, 370), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(400, 320), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Controles", &state.show_controls)) {
             ImGui::SliderFloat("Zoom", &state.zoom_level, 0.1f, 5.0f);
             ImGui::SliderFloat("Pan X", &state.pan_x, -500.0f, 500.0f);
             ImGui::SliderFloat("Pan Y", &state.pan_y, -500.0f, 500.0f);
@@ -135,8 +223,11 @@ void drawUI(UIState& state) {
             ImGui::BulletText("ESC o Q - Salir");
             ImGui::BulletText("I - Toggle Información");
             ImGui::BulletText("C - Toggle Controles");
-            
-            ImGui::End();
+            ImGui::BulletText("L - Toggle Lista Archivos");
+            ImGui::BulletText("Backspace - Directorio padre");
+            ImGui::BulletText("← o P - Archivo anterior");
+            ImGui::BulletText("→ o N - Archivo siguiente");
         }
+        ImGui::End();
     }
 }

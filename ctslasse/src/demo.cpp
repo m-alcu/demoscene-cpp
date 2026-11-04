@@ -40,6 +40,5 @@ void Demo::main() {
     while (m_.in8(0x64) & 1) m_.in8(0x60);
 }
 
-void Demo::endPart() {}
 
 }  // namespace lasse

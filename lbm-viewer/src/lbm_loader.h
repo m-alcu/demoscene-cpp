@@ -13,6 +13,8 @@ struct LBMImage {
     uint32_t height;
     uint16_t num_planes;
     uint16_t compression;
+    uint8_t masking = 0;              // 1 = plano de máscara extra (solo ILBM)
+    bool is_pbm = false;              // true = FORM PBM (chunky, 1 byte/píxel)
     std::vector<uint8_t> pixels;      // Datos de píxeles crudos
     std::vector<uint32_t> palette;    // Paleta RGBA (256 colores máx)
     uint16_t num_colors;
@@ -60,5 +62,5 @@ private:
     static ILBMHeader readBitmapHeader(const uint8_t* data, size_t size);
     static std::vector<uint8_t> decompressRLE(const uint8_t* data, size_t size, 
                                                uint32_t width, uint32_t height, 
-                                               uint8_t planes);
+                                               uint8_t planes, bool is_pbm);
 };

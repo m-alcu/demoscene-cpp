@@ -81,6 +81,7 @@ private:
     void part8();                       // 1C776h
     void part9();                       // 1A56Ah
     void endPart();                     // 1B6F3h
+    void retraces(int32_t n);           // its 3DAh waits
 
     // --- the precalculation (18A6Ch) and its textures ---------------------------
     void precalc();                     // 18A6Ch

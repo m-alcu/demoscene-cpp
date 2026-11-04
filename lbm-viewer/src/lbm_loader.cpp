@@ -9,6 +9,7 @@
 
 const uint32_t ID_FORM = MAKE_ID('F','O','R','M');
 const uint32_t ID_ILBM = MAKE_ID('I','L','B','M');
+const uint32_t ID_PBM = MAKE_ID('P','B','M',' ');
 const uint32_t ID_BMHD = MAKE_ID('B','M','H','D');
 const uint32_t ID_CMAP = MAKE_ID('C','M','A','P');
 const uint32_t ID_BODY = MAKE_ID('B','O','D','Y');
@@ -28,14 +29,15 @@ LBMImage LBMLoader::load(const std::string& filename) {
         throw std::runtime_error("Archivo LBM demasiado pequeño");
     }
 
-    // Verificar FORM y tipo ILBM
+    // Verificar FORM y tipo ILBM o PBM
     uint32_t form_id = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
     uint32_t form_type = (header[8] << 24) | (header[9] << 16) | (header[10] << 8) | header[11];
 
-    if (form_id != ID_FORM || form_type != ID_ILBM) {
+    if (form_id != ID_FORM || (form_type != ID_ILBM && form_type != ID_PBM)) {
         fclose(file);
-        throw std::runtime_error("No es un archivo ILBM válido");
+        throw std::runtime_error("No es un archivo ILBM/PBM válido");
     }
+    image.is_pbm = (form_type == ID_PBM);
 
     // Leer chunks
     bool has_header = false;
@@ -63,6 +65,7 @@ LBMImage LBMLoader::load(const std::string& filename) {
             image.width = (bmhd_data[0] << 8) | bmhd_data[1];
             image.height = (bmhd_data[2] << 8) | bmhd_data[3];
             image.num_planes = bmhd_data[8];
+            image.masking = bmhd_data[9];
             image.compression = bmhd_data[10];
 
             has_header = true;
@@ -94,7 +97,7 @@ LBMImage LBMLoader::load(const std::string& filename) {
             if (image.compression == 1) {
                 // RLE compression
                 image.pixels = decompressRLE(body_data.data(), body_data.size(),
-                                            image.width, image.height, image.num_planes);
+                                            image.width, image.height, image.num_planes + (image.masking == 1 ? 1 : 0), image.is_pbm);
             } else {
                 // Sin comprimir
                 image.pixels = body_data;
@@ -133,6 +136,36 @@ std::vector<uint32_t> LBMLoader::toRGBA(const LBMImage& image) {
 
     // Calcular bytes por línea de escaneo (redondeados a palabra)
     uint32_t bytes_per_line = ((image.width + 15) / 16) * 2;
+    // En ILBM con masking==1 cada línea lleva un plano extra de máscara
+    uint32_t stored_planes = image.num_planes + (image.masking == 1 ? 1 : 0);
+
+    // ILBM "deep" (24/32 planos): color real sin paleta.
+    // Planos 0-7 = R, 8-15 = G, 16-23 = B (24-31 = alfa, se ignora). Bit LSB primero.
+    if (!image.is_pbm && image.num_planes >= 24) {
+        std::vector<uint32_t> rgb(image.width * image.height, 0);
+        for (uint32_t y = 0; y < image.height; ++y) {
+            for (uint32_t plane = 0; plane < 24; ++plane) {
+                size_t plane_offset = (size_t)y * bytes_per_line * stored_planes + plane * bytes_per_line;
+                uint32_t shift = (plane < 8) ? 16 + plane          // R
+                               : (plane < 16) ? 8 + (plane - 8)    // G
+                               : (plane - 16);                     // B
+                for (uint32_t byte_x = 0; byte_x < bytes_per_line && plane_offset + byte_x < image.pixels.size(); ++byte_x) {
+                    uint8_t byte_val = image.pixels[plane_offset + byte_x];
+                    if (!byte_val) continue;
+                    for (int bit = 7; bit >= 0; --bit) {
+                        uint32_t x = byte_x * 8 + (7 - bit);
+                        if (x < image.width && (byte_val & (1 << bit))) {
+                            rgb[y * image.width + x] |= (1u << shift);
+                        }
+                    }
+                }
+            }
+        }
+        for (size_t i = 0; i < rgba_data.size(); ++i) {
+            rgba_data[i] = 0xFF000000 | rgb[i];
+        }
+        return rgba_data;
+    }
 
     // Si no hay paleta, usar una paleta por defecto
     if (image.palette.empty()) {
@@ -146,10 +179,20 @@ std::vector<uint32_t> LBMLoader::toRGBA(const LBMImage& image) {
     // Desinterleavear planos y convertir a índices de paleta
     std::vector<uint8_t> palette_indices(image.width * image.height, 0);
 
+    if (image.is_pbm) {
+        // PBM (Deluxe Paint PC): chunky, 1 byte por píxel, filas alineadas a par
+        uint32_t row_bytes = (image.width + 1) & ~1u;
+        for (uint32_t y = 0; y < image.height; ++y) {
+            size_t row = (size_t)y * row_bytes;
+            for (uint32_t x = 0; x < image.width && row + x < image.pixels.size(); ++x) {
+                palette_indices[y * image.width + x] = image.pixels[row + x];
+            }
+        }
+    } else
     for (uint32_t y = 0; y < image.height; ++y) {
         for (uint8_t plane = 0; plane < image.num_planes; ++plane) {
             // Offset en el buffer de píxeles para este plano en esta línea
-            size_t plane_offset = y * bytes_per_line * image.num_planes + plane * bytes_per_line;
+            size_t plane_offset = y * bytes_per_line * stored_planes + plane * bytes_per_line;
 
             for (uint32_t byte_x = 0; byte_x < bytes_per_line && plane_offset + byte_x < image.pixels.size(); ++byte_x) {
                 uint8_t byte_val = image.pixels[plane_offset + byte_x];
@@ -183,18 +226,26 @@ std::vector<uint32_t> LBMLoader::toRGBA(const LBMImage& image) {
 
 std::vector<uint8_t> LBMLoader::decompressRLE(const uint8_t* data, size_t size,
                                               uint32_t width, uint32_t height,
-                                              uint8_t planes) {
+                                              uint8_t planes, bool is_pbm) {
     std::vector<uint8_t> decompressed;
     size_t pos = 0;
-    uint32_t bytes_per_line = ((width + 15) / 16) * 2;
-    uint32_t expected_size = bytes_per_line * height * planes;
+    uint32_t expected_size;
+    if (is_pbm) {
+        expected_size = ((width + 1) & ~1u) * height;
+    } else {
+        uint32_t bytes_per_line = ((width + 15) / 16) * 2;
+        expected_size = bytes_per_line * height * planes;
+    }
     
     decompressed.reserve(expected_size);
 
     while (pos < size && decompressed.size() < expected_size) {
         uint8_t code = data[pos++];
 
-        if (code & 0x80) {
+        if (code == 0x80) {
+            // NOP en ByteRun1
+            continue;
+        } else if (code & 0x80) {
             // RLE comprimido: repetir siguiente byte
             uint8_t count = 257 - code;
             if (pos >= size) break;

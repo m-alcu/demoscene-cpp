@@ -101,6 +101,9 @@ void Demo::part9() {
     const uint32_t table = (B - 0x73F) & 0xFFFFFE00u;
     plasma(0x12312312, A, 0x3E8, 6);
     const uint32_t src = big + 0x100000;
+    // The first frame reads the word at B+7Eh before writing it: what
+    // part 8's last calls left on the stack there (8, from the harness).
+    m_.w16(B + 0x7E, 8);
     for (;;) {
         if (escape()) break;
         F.fld((X)(int32_t)((uint32_t)clock(0x1A870) - (uint32_t)t0));

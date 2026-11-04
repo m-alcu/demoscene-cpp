@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LBM Viewer
+Comment=Visor de imágenes LBM, BMP, PNG y GIF con SDL3 e ImGui
+Exec=/home/marti/proy/demoscene-cpp/sdl3-lbm-viewer/build/lbm-viewer %F
+Icon=image-x-generic
+Categories=Graphics;Viewer;
+MimeType=image/x-lbm;image/bmp;image/png;image/gif;
+NoDisplay=false
+Terminal=false
+StartupNotify=true
+Keywords=image;lbm;viewer;graphics;

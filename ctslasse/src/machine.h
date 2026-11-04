@@ -77,6 +77,8 @@ public:
     uint16_t in16(uint16_t port) { const uint8_t lo = in8(port); return (uint16_t)(lo | in8((uint16_t)(port + 1)) << 8); }
     // keys: (time, scancode) pressed into port 60h (bit 0 of 64h set till read)
     void keys(std::vector<std::pair<double, uint8_t>> k);
+    // a key now (caller side, between run() calls)
+    void press(uint8_t scancode) { keys_.push_back({t_, scancode}); }
 
     Vga vga;
     Gus gus;
