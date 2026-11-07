@@ -744,7 +744,8 @@ void Demo::writer() {
                 }
                 if (f < 0 && in(0x60) == 1) m_.w8(0x3429, 0x40);
                 if (m_.r8(0x3EF7) == 1) break;
-                m_.flagWait(0x3EF7, 1);
+                m_.flagWait(0x3EF7, 1);         // one step of time; then the test again
+                if (m_.r8(0x3EF7) == 1) break;
             }
             m_.w8(0x3EF7, 0);
             if ((int8_t)m_.r8(0x3429) >= 0) {
