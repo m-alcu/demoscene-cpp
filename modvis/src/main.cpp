@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -37,7 +36,7 @@ struct Song {
 struct App {
     SDL_Window* window = nullptr;
     SDL_AudioStream* stream = nullptr;
-    std::mutex mx;  // guards player (the audio callback renders under it)
+    int stepPending = 0;  // a song change asked for mid frame, done at the next one
     std::unique_ptr<Song> song;
     std::unique_ptr<Player> player;
     std::atomic<int64_t> rendered{0};
@@ -52,17 +51,22 @@ struct App {
     ViewSettings vs;
 };
 
+// guards the player: SDL runs the audio callback with this same (recursive) lock
+// held, so a separate mutex would deadlock against SDL_ClearAudioStream
+struct StreamLock {
+    SDL_AudioStream* s;
+    explicit StreamLock(SDL_AudioStream* s) : s(s) { SDL_LockAudioStream(s); }
+    ~StreamLock() { SDL_UnlockAudioStream(s); }
+};
+
 void SDLCALL audioCallback(void* user, SDL_AudioStream* stream, int additional, int) {
     App& app = *static_cast<App*>(user);
     const int frames = additional / 8;
     if (frames <= 0) return;
     std::vector<float> buf((size_t)frames * 2, 0.f);
-    {
-        std::lock_guard<std::mutex> g(app.mx);
-        if (app.player) {
-            app.player->render(buf.data(), frames);
-            app.rendered = app.player->position();
-        }
+    if (app.player) {  // the stream lock is already held here
+        app.player->render(buf.data(), frames);
+        app.rendered = app.player->position();
     }
     SDL_PutAudioStreamData(stream, buf.data(), (int)(buf.size() * sizeof(float)));
 }
@@ -80,7 +84,7 @@ void seekTo(App& app, int64_t s) {
     if (!app.song) return;
     s = std::clamp<int64_t>(s, 0, std::max<int64_t>(0, app.song->tl.totalSamples - 1));
     {
-        std::lock_guard<std::mutex> g(app.mx);
+        StreamLock g(app.stream);
         app.player->seek(s);
         app.rendered = app.player->position();
         SDL_ClearAudioStream(app.stream);
@@ -115,7 +119,7 @@ bool loadSong(App& app, const fs::path& path) {
     player->stereoSeparation = app.separation;
     player->interpolate = app.interpolate;
     {
-        std::lock_guard<std::mutex> g(app.mx);
+        StreamLock g(app.stream);
         app.player = std::move(player);
         app.song = std::move(song);
         app.rendered = 0;
@@ -360,7 +364,7 @@ int main(int argc, char** argv) {
             // the end of the song
             bool ended;
             {
-                std::lock_guard<std::mutex> g(app.mx);
+                StreamLock g(app.stream);
                 ended = app.player->ended();
             }
             if (app.playing && ended && measured >= app.song->tl.totalSamples - 1) {
@@ -386,6 +390,12 @@ int main(int argc, char** argv) {
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) stepOrder(app, -1);
             if (ImGui::IsKeyPressed(ImGuiKey_PageDown)) stepSong(app, 1);
             if (ImGui::IsKeyPressed(ImGuiKey_PageUp)) stepSong(app, -1);
+        }
+        if (app.stepPending) {  // the buttons, from the last frame (the song can't vanish mid frame)
+            stepSong(app, app.stepPending);
+            app.stepPending = 0;
+        }
+        if (!io.WantTextInput) {
             for (int k = 0; k < nViews; ++k)
                 if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_F1 + k), false)) app.wantView = k;
             if (app.song)
@@ -443,7 +453,7 @@ int main(int argc, char** argv) {
                                 s.mod.samples.size());
             // transport
             const double t = app.heard / kRate, total = (double)s.tl.totalSamples / kRate;
-            if (ImGui::Button("|<")) stepSong(app, -1);
+            if (ImGui::Button("|<")) app.stepPending = -1;
             ImGui::SetItemTooltip("previous song (PgUp)");
             ImGui::SameLine();
             if (ImGui::Button("<<")) stepOrder(app, -1);
@@ -459,7 +469,7 @@ int main(int argc, char** argv) {
             if (ImGui::Button(">>")) stepOrder(app, 1);
             ImGui::SetItemTooltip("next pattern (Right)");
             ImGui::SameLine();
-            if (ImGui::Button(">|")) stepSong(app, 1);
+            if (ImGui::Button(">|")) app.stepPending = 1;
             ImGui::SetItemTooltip("next song (PgDn)");
             ImGui::SameLine();
             ImGui::PushFont(fonts.mono, 15.f);
