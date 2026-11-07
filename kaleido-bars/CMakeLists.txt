@@ -13,9 +13,9 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 add_library(SDL3::SDL3 ALIAS PkgConfig::SDL3)
 
-add_library(core STATIC src/machine.cpp src/video.cpp src/demo.cpp)
+add_library(core STATIC src/demo.cpp)
 target_include_directories(core PUBLIC src)
-target_link_libraries(core PUBLIC SDL3::SDL3)   # SDL_LoadPNG for the textures
+target_link_libraries(core PUBLIC SDL3::SDL3)   # SDL_LoadPNG for the images
 
 add_executable(kaleido-bars src/main.cpp)
 target_link_libraries(kaleido-bars PRIVATE core SDL3::SDL3)
