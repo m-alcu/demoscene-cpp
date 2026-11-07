@@ -551,7 +551,11 @@ void Player::run(float* out, int frames, bool dry) {
         samplesLeft_ -= n;
         pos_ += n;
     }
-    if (!dry && done < frames) std::memset(out + 2 * done, 0, sizeof(float) * 2 * (frames - done));
+    if (!dry && done < frames) {
+        // silence after the end: the clock keeps running, so the UI hears the end arrive
+        std::memset(out + 2 * done, 0, sizeof(float) * 2 * (frames - done));
+        pos_ += frames - done;
+    }
 }
 
 void Player::render(float* out, int frames) { run(out, frames, false); }
