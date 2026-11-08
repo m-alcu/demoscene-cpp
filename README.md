@@ -1,6 +1,6 @@
 # demoscene-cpp
 
-Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos, diskettes y utilidades. Cada proyecto incluye traducciones routine-by-routine del código original, verificadas frame-by-frame contra la ejecución original.
+Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos, diskettes y utilidades. Cada proyecto incluye traducciones routine-by-routine del código original, verificadas frame-by-frame contra la ejecución original. Las recreaciones (megablast-blob, megablast-tunnel, tsbdemo) se indican como tales.
 
 ## Proyectos
 
@@ -27,8 +27,24 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 - [**imphobia12**](imphobia12/) - Puerto del Imphobia Issue #12 diskmag (1996)
 - [**journey**](journey/) - Puerto de los Journey music disks (Future Crew, 1993)
 
+### Kaleidoscopico (lft, Raspberry Pi Pico 2)
+
+Partes del demo para Pico 2 (RISC-V), verificadas frame a frame contra el emulador kemu (`rea/kaleido-analisis`).
+
+- [**kaleido-bars**](kaleido-bars/) - Partes 15-17: barras verticales giradas sobre fondo de fibra de carbono; la tecla `i` muestra el scroll aplicado a cada fila
+- [**kaleido-tunnel**](kaleido-tunnel/) - Parte 46: el túnel, con el sólido de la parte 7 (hexaedro tetrakis con relleno XOR) en lugar del globo
+- [**kaleido-snowflake**](kaleido-snowflake/) - Parte 27: copo de nieve con normal mapping y estrellas
+- [**kaleido-dotsphere**](kaleido-dotsphere/) - Parte 41: esfera de puntos
+
+### Megablast (Orange, 1996)
+
+Escenas del demo de PC, analizadas con el emulador de `rea/megademo-analisis`.
+
+- [**megablast-feedback**](megablast-feedback/) - Escena del tablero: video feedback a través de una lente precalculada, bit a bit idéntica al original
+- [**megablast-blob**](megablast-blob/) - Recreación (no puerto) del blob de gelatina luminoso, hecha a partir de una captura
+- [**megablast-tunnel**](megablast-tunnel/) - Primera recreación de la escena del tablero como túnel; sustituida por megablast-feedback
+
 ### Utilidades y visualizadores
 
-- [**kaleido-bars**](kaleido-bars/) - Barras verticales giradas sobre fondo de fibra de carbono
 - [**lbm-viewer**](lbm-viewer/) - Visor de imágenes LBM (formato Amiga)
 - [**modvis**](modvis/) - Reproductor de módulos MOD y S3M con visualización de notas
