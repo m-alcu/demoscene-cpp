@@ -6,6 +6,7 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 
 ### Intros
 
+- [**arnial**](arnial/) - Puerto de ARNIAL (LCUB, 1995): rotación, zoom y pan de un bitmap en modo X
 - [**asm94**](asm94/) - Traducción del Assembly '94 invitation intro (1994)
 - [**ctslasse**](ctslasse/) - Traducción del 64K intro Lasse Reinbøng (Cubic Team & $eeN, 1995)
 - [**cyboman2**](cyboman2/) - Traducción del 64K intro "Cyboman 2: The Inner Loop" (Complex, 1994)
