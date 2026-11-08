@@ -45,6 +45,12 @@ Escenas del demo de PC, analizadas con el emulador de `rea/megademo-analisis`.
 - [**megablast-blob**](megablast-blob/) - Recreación (no puerto) del blob de gelatina luminoso, hecha a partir de una captura
 - [**megablast-tunnel**](megablast-tunnel/) - Primera recreación de la escena del tablero como túnel; sustituida por megablast-feedback
 
+### Second Reality (Future Crew, 1993)
+
+Partes portadas desde el código fuente publicado por Future Crew, verificadas contra capturas de `SECOND.EXE` en DOSBox (`rea/2ndreal-analisis`).
+
+- [**2ndreal-water**](2ndreal-water/) - Esferas espejo sobre el agua con la espada que las atraviesa: las 58 capturas coinciden bit a bit
+
 ### Utilidades y visualizadores
 
 - [**lbm-viewer**](lbm-viewer/) - Visor de imágenes LBM (formato Amiga)
