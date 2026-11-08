@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 
 namespace kt {
 
@@ -12,6 +13,7 @@ namespace {
 // Timeline, in music positions
 constexpr uint32_t kStartPos = 14575;  // position before the first frame
 constexpr uint32_t kFadePos = 15428;   // the fade to white starts
+constexpr int32_t kSolidSize = 56;     // half the cube's edge at full size, in pixels
 
 // 4096-entry sine table, period 4096 (1024 = a quarter turn), amplitude 32767.
 int16_t sine_table[4096];
@@ -28,32 +30,23 @@ void make_sine() {
 
 int32_t S(uint32_t i) { return sine_table[i & 4095]; }
 
-// Width profile of the balloon: for each step down its outline, the row of balloon.png
-// (scaled by the zoom) that has the right width. 0-269 the envelope, 270-293 the ropes,
-// 294-325 the basket.
-const uint8_t kProfile[326] = {
-    32, 44, 49, 52, 55, 58, 60, 63, 65, 67, 68, 70, 72, 73, 75, 76, 78, 79, 80, 81,
-    82, 84, 85, 86, 87, 88, 89, 90, 91, 92, 92, 93, 94, 95, 96, 97, 97, 98, 99, 100,
-    100, 101, 102, 102, 103, 104, 104, 105, 105, 106, 107, 107, 108, 108, 109, 109, 110, 110, 111, 111,
-    112, 112, 113, 113, 113, 114, 114, 115, 115, 115, 116, 116, 117, 117, 117, 118, 118, 118, 119, 119,
-    119, 119, 120, 120, 120, 121, 121, 121, 121, 122, 122, 122, 122, 122, 123, 123, 123, 123, 123, 124,
-    124, 124, 124, 124, 124, 124, 125, 125, 125, 125, 125, 125, 125, 125, 125, 126, 126, 126, 126, 126,
-    126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126, 126,
-    126, 125, 125, 125, 125, 125, 125, 125, 125, 124, 124, 124, 124, 124, 123, 123, 123, 123, 122, 122,
-    122, 122, 121, 121, 121, 120, 120, 120, 119, 119, 118, 118, 118, 117, 117, 116, 116, 115, 115, 114,
-    114, 113, 113, 112, 112, 111, 111, 110, 109, 109, 108, 108, 107, 106, 106, 105, 104, 104, 103, 102,
-    101, 101, 100, 99, 98, 98, 97, 96, 95, 94, 93, 93, 92, 91, 90, 89, 88, 87, 86, 85,
-    84, 84, 83, 82, 81, 80, 79, 78, 77, 76, 75, 74, 73, 71, 70, 69, 68, 67, 66, 65,
-    64, 63, 62, 61, 59, 58, 57, 56, 55, 54, 53, 52, 50, 49, 48, 47, 46, 45, 43, 42,
-    41, 40, 39, 38, 36, 35, 34, 33, 0, 0, 64, 64, 64, 63, 63, 63, 62, 62, 62, 61,
-    61, 61, 60, 60, 60, 59, 59, 59, 58, 58, 58, 57, 57, 57, 56, 56, 55, 55, 54, 54,
-    54, 53, 53, 52, 52, 52, 51, 51, 50, 50, 50, 49, 49, 48, 48, 48, 47, 47, 46, 46,
-    46, 45, 45, 44, 44, 44,
-};
-
 // Colours: 12-bit 0xRGB.
 constexpr uint16_t kTunnel[3] = {0x112, 0x33b, 0x44c};                       // pixel values 4, 8, 12
-constexpr uint16_t kBalloon[6] = {0xd33, 0xf55, 0xddd, 0xd62, 0x420, 0x200};  // 4, 6, ..., 14
+// The solid's colours for pixel values 4, 6, 12 and 14: one set on even rows, a darker one on odd
+// rows.
+constexpr int kSolidValues[4] = {4, 6, 12, 14};
+constexpr uint16_t kSolid[2][4] = {{0x324, 0x658, 0xccc, 0xfff}, {0x213, 0x547, 0xaaa, 0xddd}};
+
+// The solid: a tetrakis hexahedron, i.e. a cube with a low pyramid on each face. Vertices 0-7 are
+// the cube's corners (±1, ±1, ±1)·a, 8-13 the pyramid tips on the axes at ±b, b = a·442/256 ≈ a√3,
+// so all 14 lie on one sphere.
+struct Face { uint8_t a, b, c, value; };
+constexpr Face kFaces[24] = {
+    {0, 12, 2, 4}, {2, 12, 3, 6}, {3, 12, 1, 4}, {1, 12, 0, 6}, {1, 9, 3, 6}, {3, 9, 7, 4},
+    {7, 9, 5, 6}, {5, 9, 1, 4}, {5, 13, 7, 4}, {7, 13, 6, 6}, {6, 13, 4, 4}, {4, 13, 5, 6},
+    {4, 8, 6, 6}, {6, 8, 2, 4}, {2, 8, 0, 6}, {0, 8, 4, 4}, {0, 10, 1, 4}, {1, 10, 5, 6},
+    {5, 10, 4, 4}, {4, 10, 0, 6}, {3, 11, 2, 4}, {2, 11, 6, 6}, {6, 11, 7, 4}, {7, 11, 3, 6},
+};
 
 // Per channel a + (b - a)·t/256, rounded down
 uint16_t mix(uint32_t a, uint32_t b, int32_t t) {
@@ -91,8 +84,7 @@ bool load_image(const std::string& path, int w, int h, Image& img) {
 }  // namespace
 
 bool Demo::init(const std::string& data) {
-    if (!load_image(data + "/tunnel.png", 768, 2304, tunnel) || !load_image(data + "/balloon.png", 1024, 192, balloon))
-        return false;
+    if (!load_image(data + "/tunnel.png", 768, 2304, tunnel)) return false;
     make_sine();
     pos = kStartPos;
     return true;
@@ -144,7 +136,7 @@ void Demo::main_loop() {
     front ^= 1;
 }
 
-// Colours (fade in from black over 16 frames, fade out to white over 32) and the balloon.
+// Colours (fade in from black over 16 frames, fade out to white over 32) and the solid.
 void Demo::vblank() {
     count++;
     if (phase == Fade || phase == End) fade++;
@@ -156,10 +148,11 @@ void Demo::vblank() {
     screen.view = views[front];
     screen.back = mix(from, 0, t);
     for (int i = 0; i < 3; i++) screen.tunnel[4 + 4 * i] = mix(from, kTunnel[i], t);
-    for (int i = 0; i < 6; i++) screen.balloon[4 + 2 * i] = mix(from, kBalloon[i], t);
+    for (int r = 0; r < 2; r++)
+        for (int i = 0; i < 4; i++) screen.solid[r][kSolidValues[i]] = mix(from, kSolid[r][i], t);
 
-    // The balloon bobs on two sines and, from frame 100, shrinks towards the vanishing point
-    // of the tunnel, which the current view puts at (120 - x, 282 - y).
+    // The solid bobs on two sines and, from frame 100, shrinks towards the far end of the
+    // tunnel, which the current view puts at column 384 - x, row 286 - y.
     int32_t y = (S(15 * count) >> 9) + 164;
     int32_t x = S(13 * count - 512) >> 9;
     const int32_t late = std::max((int32_t)count - 100, 0);
@@ -167,25 +160,63 @@ void Demo::vblank() {
     const View& cur = views[front];
     y = (y * scale + (282 - cur.y) * (256 - scale)) >> 8;
     x = ((x * scale + (120 - cur.x) * (256 - scale)) >> 8) + 4;
-    place_balloon(y, scale, x);
+    draw_solid(x + 256, y + (scale >> 4), (kSolidSize * scale) >> 8);
 }
 
-// Builds the balloon's copper list: each screen row (two lines) picks a row of balloon.png. The
-// image holds the outline at every width, so the profile table gives the balloon's shape and
-// stepping through it faster or slower scales it.
-void Demo::place_balloon(int32_t y, int32_t scale, int32_t x) {
-    const int32_t col = -x & 1023;
-    for (int r = 0; r < kRows; r++) { screen.row[r] = 0; screen.col[r] = (int16_t)(col & 7); }
-    int32_t r = y - (scale >> 2);
-    const uint32_t step = 0x20000u / (uint32_t)scale;
-    auto put = [&](int row) {
-        if (r >= 0 && r < kRows) { screen.row[r] = (int16_t)row; screen.col[r] = (int16_t)col; }
-        r++;
+// ---- the solid ----
+
+// XORs one edge into the solid's buffer: in each column it crosses, its value goes into the one
+// pixel where it passes (the row clamped to 0..383, so an edge above the screen flips the whole
+// column). 16-bit fixed point; columns x0..x1-1, at most up to 510.
+void Demo::edge(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t value) {
+    if (x0 >= x1) { std::swap(x0, x1); std::swap(y0, y1); }
+    if (x0 == x1) return;
+    const int32_t slope = (int32_t)((uint32_t)(y1 - y0) << 16) / (x1 - x0);
+    int32_t y = (int32_t)((uint32_t)y0 << 16);
+    x1 = std::min(x1, W - 1);
+    if (x0 < 0) { y -= (int32_t)((uint32_t)x0 * (uint32_t)slope); x0 = 0; }
+    for (int32_t x = x0; x < x1; x++, y += slope)
+        screen.pix[std::clamp(y, 0, (kRows - 1) << 16) >> 16][x] ^= value;
+}
+
+// Draws the solid centred on column x, row y (rows of two lines). It is turned about the
+// vertical axis, then about the horizontal one, and projected straight onto the screen.
+//
+// Every face is drawn as three XORed edges, and each column is then XOR-accumulated downwards, so
+// a pixel ends up with the XOR of all the faces over it. The faces turned towards the viewer use
+// their own value (4 or 6); of those turned away, only the ones with value 4 are drawn, with 8.
+// A pixel of the solid is therefore 4 or 6 from the face in front, plus 8 when a "4" face is
+// behind it: 4 shades, and the back faces show through as a second pattern.
+void Demo::draw_solid(int32_t cx, int32_t cy, int32_t a) {
+    std::fill(&screen.pix[0][0], &screen.pix[0][0] + sizeof screen.pix, 0);
+    const int32_t b = (a * 442) >> 8;
+    const int32_t vert[14][3] = {
+        {-a, -a, -a}, {a, -a, -a}, {-a, a, -a}, {a, a, -a}, {-a, -a, a}, {a, -a, a}, {-a, a, a},
+        {a, a, a}, {-b, 0, 0}, {b, 0, 0}, {0, -b, 0}, {0, b, 0}, {0, 0, -b}, {0, 0, b},
     };
-    uint32_t a = 0;
-    for (; a < 0x10e00; a += step) put((kProfile[a >> 8] * scale) >> 9);          // envelope
-    for (a = 0x10e00; a < 0x12600; a += step) put(((kProfile[a >> 8] * scale) >> 10) + 144);  // ropes
-    for (a = 0x12600; a < 0x14600; a += step) put(((kProfile[a >> 8] * scale) >> 10) + 96);   // basket
+    const int32_t s1 = S(11 * pos), c1 = S(11 * pos + 1024), s2 = S(9 * pos), c2 = S(9 * pos + 1024);
+    int32_t px[14], py[14];
+    for (int i = 0; i < 14; i++) {
+        const int32_t x = vert[i][0], y = vert[i][1], z = vert[i][2];
+        const int32_t x1 = (x * c1 + z * s1) >> 15, z1 = (z * c1 - x * s1) >> 15;
+        px[i] = x1 + cx;
+        py[i] = ((y * c2 + z1 * s2) >> 15) + cy;
+    }
+    for (const Face& f : kFaces) {
+        const int32_t cross = (px[f.a] - px[f.b]) * (py[f.a] - py[f.c]) - (py[f.a] - py[f.b]) * (px[f.a] - px[f.c]);
+        uint8_t v = f.value;
+        if (cross >= 0) {   // facing away
+            v <<= 1;
+            if (v != 8) continue;
+        }
+        edge(px[f.a], py[f.a], px[f.b], py[f.b], v);
+        edge(px[f.b], py[f.b], px[f.c], py[f.c], v);
+        edge(px[f.a], py[f.a], px[f.c], py[f.c], v);
+    }
+    for (int x = 0; x < W; x++) {
+        uint8_t v = 0;
+        for (int r = 0; r < kRows; r++) screen.pix[r][x] = v ^= screen.pix[r][x];
+    }
 }
 
 // ---- drawing ----
@@ -201,13 +232,12 @@ void Demo::draw() {
     for (int line = 0; line < H; line++) {
         if (line == turn) dir = -1;
         const uint8_t* t = img + row * tunnel.w + v.x;
-        const int br = line >> 1;
-        const uint8_t* b = &balloon.px[screen.row[br] * balloon.w];
-        const int bc = screen.col[br];
+        const uint8_t* o = screen.pix[line >> 1];
+        const uint16_t* oc = screen.solid[(line >> 1) & 1];
         uint32_t* out = &canvas[line * W];
         for (int x = 0; x < W; x++) {
-            const uint8_t bp = b[(bc + x) & 1023], tp = t[x];
-            out[x] = argb(bp ? screen.balloon[bp] : tp ? screen.tunnel[tp] : screen.back);
+            const uint8_t op = o[x], tp = t[x];
+            out[x] = argb(op ? oc[op] : tp ? screen.tunnel[tp] : screen.back);
         }
         if (line & 1) row += dir;
     }

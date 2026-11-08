@@ -1,5 +1,5 @@
-// The scene: a hot-air balloon flying down a checkered tunnel. Everything is drawn in software
-// into a 512x768 canvas.
+// The scene: a spinning faceted solid flying down a checkered tunnel. Everything is drawn in
+// software into a 512x768 canvas.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -10,7 +10,7 @@
 namespace kt {
 
 constexpr int W = 512, H = 768;   // canvas; the window shows each pixel two pixels wide
-constexpr int kRows = H / 2;      // the balloon is positioned in rows of two lines
+constexpr int kRows = H / 2;      // the solid is drawn in rows of two lines
 
 // An indexed image: one 4-bit pixel value per byte.
 struct Image {
@@ -21,7 +21,7 @@ struct Image {
 
 class Demo {
   public:
-    bool init(const std::string& data);   // loads data/tunnel.png and data/balloon.png
+    bool init(const std::string& data);   // loads data/tunnel.png
     void step();                          // draws the current frame, then advances the timeline
     bool finished() const { return done; }
     long frame() const { return frame_; } // number of the frame the next step() draws
@@ -40,13 +40,12 @@ class Demo {
         View view;
         uint16_t back = 0;               // colour behind the tunnel
         uint16_t tunnel[16] = {};        // colour per tunnel pixel value
-        uint16_t balloon[16] = {};       // colour per balloon pixel value
-        int16_t row[kRows] = {};         // balloon image row per screen row
-        int16_t col[kRows] = {};         // balloon image column at the left edge, per screen row
+        uint16_t solid[2][16] = {};      // colour per solid pixel value, on even and odd rows
+        uint8_t pix[kRows][W] = {};      // the solid: 4-bit pixel values, 0 = transparent
     };
     enum Phase { Prep, Arm, Run, Fade, End };
 
-    Image tunnel, balloon;
+    Image tunnel;
     std::vector<uint32_t> canvas = std::vector<uint32_t>(W * H);
 
     long frame_ = 0;
@@ -63,7 +62,8 @@ class Demo {
     void tick();
     void main_loop();
     void vblank();
-    void place_balloon(int32_t y, int32_t scale, int32_t x);
+    void draw_solid(int32_t x, int32_t y, int32_t size);
+    void edge(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t value);
     void draw();
 };
 

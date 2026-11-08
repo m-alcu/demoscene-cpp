@@ -1,4 +1,4 @@
-// kaleido-tunnel - a hot-air balloon flying down a checkered tunnel, in C++17 / SDL3.
+// kaleido-tunnel - a spinning faceted solid flying down a checkered tunnel, in C++17 / SDL3.
 //
 // Usage: kaleido-tunnel [--data DIR] [--scale N] [--loop]
 //        kaleido-tunnel --dump DIR [--ppm A:B]
