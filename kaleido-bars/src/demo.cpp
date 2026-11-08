@@ -157,6 +157,8 @@ void Demo::draw_mask() {
 // ---- drawing ----
 
 void Demo::draw() {
+    shown_ = part == Bars;
+    shown_pos_ = pos;
     if (part == Blue) {
         std::fill(canvas.begin(), canvas.begin() + 512 * W, kBlue);
         std::fill(canvas.begin() + 512 * W, canvas.end(), kDarkBlue);
@@ -191,6 +193,8 @@ void Demo::draw() {
     int rows[384];
     uint32_t phase = (uint32_t)((S((pos & 255) << 4) >> 8) + (int32_t)pos) << 3;
     for (int r = 0; r < 384; r++, phase += 8) rows[r] = ((pos << 1) + (uint32_t)(S(phase) >> 9)) & 127;
+    std::copy(rows, rows + 384, rows_);
+    shift_ = shift;
 
     for (int y = 0; y < H; y++) {
         // row r covers lines 2r-1 and 2r; the first row only line 0, the last also line 767

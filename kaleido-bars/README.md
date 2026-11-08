@@ -24,6 +24,16 @@ ctest --test-dir build                       # every frame against the reference
 
 Esc quits. The scene plays once and then exits; `--loop` repeats it.
 
+**`i` toggles an info panel** to the right of the picture. The window gets
+wider, so the panel doesn't cover the bars. For every screen row, a yellow
+curve shows which row of `bars.png` (0-127) that row displays: the `R(r)`
+below. The red line is `2p mod 128`, the part that moves with time. The
+curve is a sine wave travelling around that line, so neighbouring rows show
+slightly different twist angles, and the bundle bulges and pinches instead
+of turning as one piece. A legend gives `p` and the horizontal shift `s`,
+which is the same for all rows. The panel is only drawn in the window: it
+doesn't change the canvas, the `--dump` CRCs or the test.
+
 Headless: `kaleido-bars --dump DIR [--ppm A:B]` writes `DIR/frames.txt`,
 one line per frame with the frame number and the CRC-32 of the 512x768
 RGB24 canvas. `--ppm` also saves frames A..B-1 as PPM files. The test

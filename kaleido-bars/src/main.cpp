@@ -1,12 +1,14 @@
 // kaleido-bars - twisted vertical bars over a scrolling carbon background, in C++17 / SDL3.
 //
-// Usage: kaleido-bars [--data DIR] [--scale N] [--loop]
+// Usage: kaleido-bars [--data DIR] [--scale N] [--loop]     (keys: i info panel, Esc quit)
 //        kaleido-bars --dump DIR [--ppm A:B]
 //            (no window: DIR/frames.txt, a line per frame: frame number and the CRC-32 of the
 //            512x768 RGB24 canvas; --ppm also writes frames A..B-1 as PPM files)
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <cstring>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -56,6 +58,79 @@ int dump(kb::Demo& demo, const std::string& dir, long ppm_a, long ppm_b) {
     return 0;
 }
 
+// The info panel ('i'), to the right of the picture: for every screen row, which row of
+// bars.png it shows. Each row of bars.png is one cross-section of the twisted ribbons, so this
+// curve is the whole trick: the rows pick different twist angles along a travelling sine wave.
+constexpr int kPanelW = 320;           // logical pixels
+constexpr float kPlotX = 1024 + 36;    // texture row 0; texture row R is at kPlotX + 2R
+
+void text(SDL_Renderer* ren, float x, float y, const char* s) { SDL_RenderDebugText(ren, x, y, s); }
+
+void draw_panel(SDL_Renderer* ren, const kb::Demo& demo) {
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 14, 14, 22, 255);
+    const SDL_FRect bg{1024, 0, kPanelW, 768};
+    SDL_RenderFillRect(ren, &bg);
+
+    char buf[64];
+    // grid: texture rows every 32 (vertical lines), screen rows every 64 (horizontal lines)
+    for (int r = 0; r <= 128; r += 32) {
+        SDL_SetRenderDrawColor(ren, 60, 60, 80, 255);
+        SDL_RenderLine(ren, kPlotX + 2 * r, 24, kPlotX + 2 * r, 767);
+        SDL_SetRenderDrawColor(ren, 150, 150, 170, 255);
+        std::snprintf(buf, sizeof buf, "%d", r);
+        text(ren, kPlotX + 2 * r - 4 * (float)std::strlen(buf), 12, buf);
+    }
+    for (int row = 64; row < 384; row += 64) {
+        SDL_SetRenderDrawColor(ren, 45, 45, 60, 255);
+        SDL_RenderLine(ren, kPlotX, 2.0f * row, kPlotX + 256, 2.0f * row);
+        SDL_SetRenderDrawColor(ren, 150, 150, 170, 255);
+        std::snprintf(buf, sizeof buf, "%d", row);
+        text(ren, 1024 + 4, 2.0f * row - 4, buf);
+    }
+    SDL_SetRenderDrawColor(ren, 150, 150, 170, 255);
+    text(ren, 1024 + 4, 2, "row");
+    text(ren, kPlotX + 72, 2, "bars.png row");
+
+    if (!demo.bars_shown()) {
+        SDL_SetRenderDrawColor(ren, 220, 220, 220, 255);
+        text(ren, 1024 + 40, 380, "the bars are not on screen yet");
+        return;
+    }
+
+    // 2p mod 128: where the curve's centre is. The sine wave swings around it.
+    const uint32_t p = demo.position();
+    const float base = kPlotX + 2.0f * ((2 * p) & 127);
+    SDL_SetRenderDrawColor(ren, 200, 70, 70, 255);
+    SDL_RenderLine(ren, base, 24, base, 767);
+
+    // the curve: screen row r covers lines 2r-1 and 2r; break it where it wraps past 127
+    SDL_SetRenderDrawColor(ren, 255, 220, 60, 255);
+    for (int r = 0; r < 384; r++) {
+        const float x = kPlotX + 2.0f * demo.bar_row(r), y = 2.0f * r;
+        if (r > 0 && std::abs(demo.bar_row(r) - demo.bar_row(r - 1)) < 64)
+            SDL_RenderLine(ren, kPlotX + 2.0f * demo.bar_row(r - 1), y - 2, x, y);
+        else
+            SDL_RenderLine(ren, x, std::max(y - 1, 0.0f), x, y);
+    }
+
+    // legend
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
+    const SDL_FRect box{1024 + 4, 680, kPanelW - 8, 84};
+    SDL_RenderFillRect(ren, &box);
+    SDL_SetRenderDrawColor(ren, 255, 220, 60, 255);
+    text(ren, 1024 + 10, 686, "R(r) = (2p + S(phi+8r)>>9) mod 128");
+    SDL_SetRenderDrawColor(ren, 200, 70, 70, 255);
+    std::snprintf(buf, sizeof buf, "2p mod 128 = %u", (2 * p) & 127);
+    text(ren, 1024 + 10, 700, buf);
+    SDL_SetRenderDrawColor(ren, 220, 220, 220, 255);
+    std::snprintf(buf, sizeof buf, "p = %u", p);
+    text(ren, 1024 + 10, 714, buf);
+    std::snprintf(buf, sizeof buf, "x shift s = %d (all rows)", (int32_t)demo.bar_shift());
+    text(ren, 1024 + 10, 728, buf);
+    text(ren, 1024 + 10, 746, "i: hide this panel");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -94,6 +169,7 @@ int main(int argc, char** argv) {
     SDL_Window* win = SDL_CreateWindow("kaleido-bars", 1024 * scale, 768 * scale, SDL_WINDOW_RESIZABLE);
     SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
     SDL_SetRenderLogicalPresentation(ren, 1024, 768, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    bool info = false;
     SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, kb::W, kb::H);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
 
@@ -107,6 +183,15 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) running = false;
             if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_ESCAPE) running = false;
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_I && !e.key.repeat) {
+                // the panel widens the window instead of covering the bars
+                info = !info;
+                const int lw = 1024 + (info ? kPanelW : 0);
+                int ww, wh;
+                SDL_GetWindowSize(win, &ww, &wh);
+                SDL_SetWindowSize(win, wh * lw / 768, wh);
+                SDL_SetRenderLogicalPresentation(ren, lw, 768, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+            }
         }
         if (demo->finished()) {
             if (!loop) break;
@@ -122,7 +207,9 @@ int main(int argc, char** argv) {
         if (due > now) SDL_DelayNS((due - now) * 1000000000ull / freq);
         SDL_UpdateTexture(tex, nullptr, demo->pixels(), kb::W * 4);
         SDL_RenderClear(ren);
-        SDL_RenderTexture(ren, tex, nullptr, nullptr);
+        const SDL_FRect pic{0, 0, 1024, 768};
+        SDL_RenderTexture(ren, tex, nullptr, &pic);
+        if (info) draw_panel(ren, *demo);
         SDL_RenderPresent(ren);
     }
     SDL_DestroyTexture(tex);

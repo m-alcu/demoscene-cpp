@@ -26,6 +26,14 @@ class Demo {
     const uint32_t* pixels() const { return canvas.data(); }   // W*H ARGB8888
     void to_rgb24(uint8_t* out) const;
 
+    // What the last drawn frame did, for the info panel. bars_shown() is false before the bars
+    // part; bar_row(r) is the bars.png row shown on screen row r (0..383, two lines each), and
+    // bar_shift() the horizontal offset common to all rows.
+    bool bars_shown() const { return shown_; }
+    int bar_row(int r) const { return rows_[r]; }
+    uint32_t bar_shift() const { return shift_; }
+    uint32_t position() const { return shown_pos_; }   // music position of the last drawn frame
+
   private:
     enum Part { Blue, Wipe, Bars };
 
@@ -38,6 +46,9 @@ class Demo {
     bool done = false;
     uint32_t pos;                // music position in frames (60 per second, 112 per bar)
     int t = 0;                   // frames into the current part
+    bool shown_ = false;         // last drawn frame: bars on screen, rows, shift, position
+    int rows_[384] = {};
+    uint32_t shift_ = 0, shown_pos_ = 0;
     int fade = 0;                // frames since the bars started leaving
     bool covered = false, held = false, leaving = false;
 
