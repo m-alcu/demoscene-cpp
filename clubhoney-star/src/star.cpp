@@ -41,8 +41,8 @@ const Key CAM_TARGET[] = {
 // The star stays put: one rotation (quaternion w, x, y, z) and one position.
 constexpr float OBJ_ROT[4] = {-0.41862151f, 0.906903803f, -0.0402556881f, 0.0257106125f};
 constexpr float OBJ_POS[3] = {7.24637604f, 0.0f, -1.44927597f};
-// Projection factors (pixels) for a 320x200 screen shown at 4:3
-constexpr float FOVX = 386.27417f, FOVY = 321.895142f;
+// Projection factors (pixels) for a 320x200 screen shown at 4:3, scaled to the buffer
+constexpr float FOVX = 386.27417f * RES, FOVY = 321.895142f * RES;
 constexpr float ZNEAR = 0.5f;
 constexpr uint32_t BACKGROUND = 0xFF7D9B7Cu;   // the green the scene's picture fades to
 
@@ -142,10 +142,34 @@ bool Star::load_texture(const std::string& path) {
     const SDL_Palette* p = SDL_GetSurfacePalette(s);
     const bool ok = s->format == SDL_PIXELFORMAT_INDEX8 && p && s->w == 256 && s->h == 256;
     if (ok) {
-        tex.resize(256 * 256);
-        for (int y = 0; y < 256; y++) std::memcpy(&tex[y * 256], (uint8_t*)s->pixels + y * s->pitch, 256);
+        // palette indices to RGB, then a bilinear enlargement to TEX x TEX (edges clamped)
+        uint32_t pal[256] = {};
         for (int i = 0; i < p->ncolors && i < 256; i++)
-            pal[i] = 0xFF000000u | (uint32_t)p->colors[i].r << 16 | (uint32_t)p->colors[i].g << 8 | p->colors[i].b;
+            pal[i] = (uint32_t)p->colors[i].r << 16 | (uint32_t)p->colors[i].g << 8 | p->colors[i].b;
+        auto src = [&](int x, int y) {
+            x = std::clamp(x, 0, 255); y = std::clamp(y, 0, 255);
+            return pal[((const uint8_t*)s->pixels)[y * s->pitch + x]];
+        };
+        tex.resize(TEX * TEX);
+        for (int y = 0; y < TEX; y++) {
+            const float sy = (y + 0.5f) * 256.0f / TEX - 0.5f;
+            const int y0 = (int)std::floor(sy);
+            const float fy = sy - y0;
+            for (int x = 0; x < TEX; x++) {
+                const float sx = (x + 0.5f) * 256.0f / TEX - 0.5f;
+                const int x0 = (int)std::floor(sx);
+                const float fx = sx - x0;
+                const uint32_t c00 = src(x0, y0), c10 = src(x0 + 1, y0);
+                const uint32_t c01 = src(x0, y0 + 1), c11 = src(x0 + 1, y0 + 1);
+                uint32_t out = 0xFF000000u;
+                for (int sh = 0; sh <= 16; sh += 8) {
+                    const float top = ((c00 >> sh) & 255) * (1 - fx) + ((c10 >> sh) & 255) * fx;
+                    const float bot = ((c01 >> sh) & 255) * (1 - fx) + ((c11 >> sh) & 255) * fx;
+                    out |= (uint32_t)(top * (1 - fy) + bot * fy + 0.5f) << sh;
+                }
+                tex[y * TEX + x] = out;
+            }
+        }
     } else {
         std::fprintf(stderr, "%s: not a 256x256 indexed picture\n", path.c_str());
     }
@@ -191,9 +215,9 @@ void Star::triangle(const ClipVert& a, const ClipVert& b, const ClipVert& c) {
             float& d = depth[y * W + x];
             if (iz <= d) continue;
             d = iz;
-            const int u = std::clamp((int)(w0 * p0.u + w1 * p1.u + w2 * p2.u), 0, 255);
-            const int v = std::clamp((int)(w0 * p0.v + w1 * p1.v + w2 * p2.v), 0, 255);
-            color[y * W + x] = pal[tex[v * 256 + u]];
+            const int u = std::clamp((int)(w0 * p0.u + w1 * p1.u + w2 * p2.u), 0, TEX - 1);
+            const int v = std::clamp((int)(w0 * p0.v + w1 * p1.v + w2 * p2.v), 0, TEX - 1);
+            color[y * W + x] = tex[v * TEX + u];
         }
     }
 }
@@ -223,7 +247,8 @@ void Star::render(float frame) {
     std::vector<ClipVert> cv(pos.size());
     for (size_t i = 0; i < pos.size(); i++) {
         const Vec3 p = xform(pos[i]), n = rotate(nrm[i]);
-        cv[i] = {p.x, p.y, p.z, n.x * 127.0f + 128.0f, n.y * 127.0f + 128.0f};
+        const float r = TEX * 0.5f;
+        cv[i] = {p.x, p.y, p.z, n.x * (r - 1) + r, n.y * (r - 1) + r};
     }
 
     for (const Face& f : faces) {

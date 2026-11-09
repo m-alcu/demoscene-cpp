@@ -1,5 +1,5 @@
 // clubhoney-star - the chrome star of Club Honey (Acme, Bizarre '98): an environment-mapped
-// mesh with the scene's camera flight, rendered in software at 320x200 with SDL3.
+// mesh with the scene's camera flight, rendered in software at 320x200 (times honey::RES) with SDL3.
 //
 // Usage: clubhoney-star [--scale N] [--loop] [--data DIR]
 // Keys:  Space pauses, Escape quits.
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
     honey::Star star;
     if (!star.init(find_data(data))) return 1;
 
-    // 320x200 shown at 4:3, as on a VGA monitor
+    // the 320x200 picture shown at 4:3, as on a VGA monitor
     SDL_Window* win = SDL_CreateWindow("Club Honey - star", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
     SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
     SDL_SetRenderVSync(ren, 1);
