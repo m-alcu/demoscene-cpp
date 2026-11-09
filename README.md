@@ -51,6 +51,12 @@ Partes portadas desde el código fuente publicado por Future Crew, verificadas c
 
 - [**2ndreal-water**](2ndreal-water/) - Esferas espejo sobre el agua con la espada que las atraviesa: las 58 capturas coinciden bit a bit
 
+### Club Honey (Acme, Bizarre '98)
+
+Puerto de CLUB.EXE (Watcom LE, motor 3D con keyframer de 3D Studio), verificado contra la ejecución emulada (`rea/b98dem15-analisis`).
+
+- [**clubhoney-star**](clubhoney-star/) - La estrella cromada con environment map, la cámara animada y el fundido a verde: 266 frames idénticos bit a bit
+
 ### Utilidades y visualizadores
 
 - [**lbm-viewer**](lbm-viewer/) - Visor de imágenes LBM (formato Amiga)
