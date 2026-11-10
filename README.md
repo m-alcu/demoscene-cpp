@@ -12,6 +12,7 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 - [**cyboman2**](cyboman2/) - Traducción del 64K intro "Cyboman 2: The Inner Loop" (Complex, 1994)
 - [**desert**](desert/) - Puerto del 128-byte intro Desert Fractal (ETERNAL, 1996)
 - [**drift**](drift/) - Traducción del 64K intro DRIFT, ganador en Assembly '95 (Wild Light)
+- [**gouraud-torus**](gouraud-torus/) - Efecto propio al estilo 1993-95: toro con sombreado Gouraud, rasterizado por software a 320x200x256 (rampa de paleta, algoritmo del pintor, scanlines en coma fija)
 - [**hexappeal**](hexappeal/) - Puerto de la sección final de "HEX APPEAL" (Cascada, 1993)
 - [**insert-chipcity**](insert-chipcity/) - Escena "chip city" del 64K Win32 Insert No Coins (Razor 1911, 2010): las mismas llamadas OpenGL 1.x, float a float, que la traza del original (3005 frames)
 - [**projange**](projange/) - Traducción del demo Project Angel (Impact Studios, 1994)
