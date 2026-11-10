@@ -13,6 +13,7 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 - [**desert**](desert/) - Puerto del 128-byte intro Desert Fractal (ETERNAL, 1996)
 - [**drift**](drift/) - Traducción del 64K intro DRIFT, ganador en Assembly '95 (Wild Light)
 - [**hexappeal**](hexappeal/) - Puerto de la sección final de "HEX APPEAL" (Cascada, 1993)
+- [**insert-chipcity**](insert-chipcity/) - Escena "chip city" del 64K Win32 Insert No Coins (Razor 1911, 2010): las mismas llamadas OpenGL 1.x, float a float, que la traza del original (3005 frames)
 - [**projange**](projange/) - Traducción del demo Project Angel (Impact Studios, 1994)
 - [**rbgdemo2**](rbgdemo2/) - Puerto del vector demo "Black Glass ][" (Tran/Renaissance, 1992)
 - [**show**](show/) - Traducción del demo Show (Majic 12, 1994)
