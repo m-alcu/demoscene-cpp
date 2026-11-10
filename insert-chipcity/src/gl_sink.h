@@ -1,48 +1,14 @@
 // The OpenGL 1.x calls the chip-city scene makes, as an interface. The scene code emits
-// exactly the call sequence of the original intro; a backend either executes it (gl_real.cpp)
-// or prints it in apitrace's dump format (gl_record.cpp) so it can be compared with the trace.
+// exactly the call sequence of the original intro; a backend either executes it (gl_real.h)
+// or prints it in apitrace's dump format (tests/gl_record.cpp) so it can be compared with the
+// trace.
 #pragma once
+
+#include <GL/gl.h>
 
 #include <cstdint>
 
 namespace icc {
-
-// GL enum values (from gl.h; kept here so the core does not need GL headers). When gl.h is
-// included first its macros (same values) are used instead.
-#ifndef GL_VERSION_1_1
-enum : unsigned {
-    GL_DEPTH_BUFFER_BIT = 0x0100,
-    GL_COLOR_BUFFER_BIT = 0x4000,
-    GL_QUADS = 0x0007,
-    GL_ONE = 1,
-    GL_SRC_COLOR = 0x0300,
-    GL_SRC_ALPHA = 0x0302,
-    GL_DST_COLOR = 0x0306,
-    GL_BACK = 0x0405,
-    GL_CULL_FACE = 0x0B44,
-    GL_FOG = 0x0B60,
-    GL_FOG_DENSITY = 0x0B62,
-    GL_FOG_START = 0x0B63,
-    GL_FOG_END = 0x0B64,
-    GL_FOG_MODE = 0x0B65,
-    GL_FOG_COLOR = 0x0B66,
-    GL_DEPTH_TEST = 0x0B71,
-    GL_BLEND = 0x0BE2,
-    GL_FOG_HINT = 0x0C54,
-    GL_TEXTURE_2D = 0x0DE1,
-    GL_NICEST = 0x1102,
-    GL_MODELVIEW = 0x1700,
-    GL_PROJECTION = 0x1701,
-    GL_LINEAR = 0x2601,
-    GL_NEAREST = 0x2600,
-    GL_TEXTURE_MAG_FILTER = 0x2800,
-    GL_TEXTURE_MIN_FILTER = 0x2801,
-    GL_TEXTURE_WRAP_S = 0x2802,
-    GL_TEXTURE_WRAP_T = 0x2803,
-    GL_REPEAT = 0x2901,
-    GL_COMPILE = 0x1300,
-};
-#endif
 
 struct GlSink {
     virtual ~GlSink() = default;

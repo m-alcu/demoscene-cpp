@@ -16,15 +16,16 @@ set(OpenGL_GL_PREFERENCE GLVND)
 find_package(OpenGL REQUIRED)
 
 # The scene: x87 maths (long double, fcos/fsin) - no fast-math, no FMA contraction.
-add_library(core STATIC src/chipcity.cpp src/gl_record.cpp)
-target_include_directories(core PUBLIC src)
+# GL headers only (gl_sink.h uses gl.h's enums); the core does not link against GL.
+add_library(core STATIC src/chipcity.cpp)
+target_include_directories(core PUBLIC src ${OPENGL_INCLUDE_DIR})
 target_compile_options(core PRIVATE -ffp-contract=off -fno-fast-math)
 
-add_executable(insert-chipcity src/main.cpp src/gl_real.cpp)
+add_executable(insert-chipcity src/main.cpp)
 target_link_libraries(insert-chipcity PRIVATE core SDL3::SDL3 OpenGL::GL)
 
 enable_testing()
-add_executable(insert_chipcity_tests tests/tests.cpp)
+add_executable(insert_chipcity_tests tests/tests.cpp tests/gl_record.cpp)
 target_link_libraries(insert_chipcity_tests PRIVATE core SDL3::SDL3)
 add_test(NAME insert_chipcity_tests
          COMMAND insert_chipcity_tests ${CMAKE_SOURCE_DIR}/data ${CMAKE_SOURCE_DIR}/tests/data)
