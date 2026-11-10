@@ -1,13 +1,14 @@
 // insert-chipcity - the "chip city" scene of Insert No Coins (Razor 1911, 2010, Win32 64k),
 // music orders 4-7, ported to C++17 / SDL3 / OpenGL 1.x. Visuals only (no music).
 //
-// Usage: insert-chipcity [--scale N] [--data DIR]
+// Usage: insert-chipcity [--original] [--scale N] [--data DIR]
 //            keys: Space pause, R restart, F fullscreen, Esc quit
 //        insert-chipcity --dump DIR [--fps F] [--frames N] [--start SECONDS]
 //            (hidden window: writes 800x500 frames DIR/fNNNN.ppm at F per second of the scene)
 //
 // The scene renders at the original 800x500 into a framebuffer object, which is scaled to the
-// window. It loops: 15.36 s, then the start flash again.
+// window. By default the camera flight loops seamlessly every 28.8 s; --original plays the
+// scene as in the intro (15.36 s: start flash and zoom, closing swing), then loops.
 #include <SDL3/SDL.h>
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -97,19 +98,32 @@ bool load_atlas(const std::string& dir, std::vector<uint8_t>& rgb) {
     return true;
 }
 
-// The scene's timeline: music time 15.36 s (order 4) to 30.72 s (order 8). The original's
-// clock t counts from program start and the XM starts at t = 3 s.
+// The scene's timeline. Circular (default): a seamless 28.8 s loop of the camera flight.
+// Original (--original): music time 15.36 s (order 4) to 30.72 s (order 8) with the start flash
+// and the closing swing; the original's clock t counts from program start and the XM starts
+// at t = 3 s.
 class Timeline {
 public:
-    explicit Timeline(ChipCity& cc) : cc_(cc) {}
+    Timeline(ChipCity& cc, bool circular) : cc_(cc), circular_(circular) {}
+    double length() const { return circular_ ? kLoopLen : kSceneEnd - kSceneStart; }
     void restart() { tau_ = 0; started_ = swung_ = false; }
     // Draw the frame at scene time tau (seconds); handles the music-row events and looping.
     void frame(GlSink& g, double tau) {
-        const double len = kSceneEnd - kSceneStart;
+        const double len = length();
         if (tau >= len) tau -= len * (int)(tau / len);
         if (tau < tau_) started_ = swung_ = false;  // looped
         tau_ = tau;
-        const float b = phase((float)(kMusicStart + kSceneStart + tau));
+        const double t0 = kMusicStart + kSceneStart;
+        if (circular_) {
+            // Phases relative to a fixed start, so the loop point is the same frame.
+            if (!started_) {
+                cc_.start_circular(g, phase((float)t0));
+                started_ = true;
+            }
+            cc_.frame(g, phase((float)(t0 + tau)));
+            return;
+        }
+        const float b = phase((float)(t0 + tau));
         if (!started_) {
             cc_.start(g, b);
             started_ = true;
@@ -123,6 +137,7 @@ public:
 
 private:
     ChipCity& cc_;
+    bool circular_;
     double tau_ = 0;
     bool started_ = false, swung_ = false;
 };
@@ -168,7 +183,8 @@ int dump(GLuint fbo, Timeline& tl, GlSink& g, const std::string& dir, double fps
 
 int main(int argc, char** argv) {
     std::string data, dump_dir;
-    int scale = 1, frames = 768;
+    int scale = 1, frames = -1;
+    bool original = false;
     double fps = 50, start = 0;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -177,9 +193,10 @@ int main(int argc, char** argv) {
         else if (a == "--dump" && i + 1 < argc) dump_dir = argv[++i];
         else if (a == "--fps" && i + 1 < argc) fps = std::atof(argv[++i]);
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
+        else if (a == "--original") original = true;
         else if (a == "--start" && i + 1 < argc) start = std::atof(argv[++i]);
         else {
-            std::fprintf(stderr, "usage: insert-chipcity [--scale N] [--data DIR] | "
+            std::fprintf(stderr, "usage: insert-chipcity [--original] [--scale N] [--data DIR] | "
                                  "--dump DIR [--fps F] [--frames N] [--start S]\n");
             return 1;
         }
@@ -210,7 +227,8 @@ int main(int argc, char** argv) {
     GlReal gl;
     ChipCity cc;
     cc.init(gl, atlas.data());
-    Timeline tl(cc);
+    Timeline tl(cc, !original);
+    if (frames < 0) frames = (int)(tl.length() * fps + 0.5);  // one loop
 
     if (!dump_dir.empty()) {
         const int r = dump(fbo, tl, gl, dump_dir, fps, frames, start);
@@ -243,8 +261,7 @@ int main(int argc, char** argv) {
         const Uint64 now = SDL_GetPerformanceCounter();
         if (!paused) tau += (now - last) / freq;
         last = now;
-        const double len = kSceneEnd - kSceneStart;
-        if (tau >= len) tau -= len;
+        if (tau >= tl.length()) tau -= tl.length();
         pBindFramebuffer(GL_FRAMEBUFFER, fbo);
         tl.frame(gl, tau);
         blit_to_window(win, fbo);

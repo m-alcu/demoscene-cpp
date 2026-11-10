@@ -149,6 +149,16 @@ void ChipCity::start(GlSink& g, float b) {
     b_zoom_ = b;
     swing_ = false;
     swing_cos_ = 1.0f;
+    spin_rate_ = kSpinRate;
+    g.Fogfv(GL_FOG_COLOR, kFogColor);
+}
+
+void ChipCity::start_circular(GlSink& g, float b) {
+    b0_ = b;
+    b_zoom_ = b;  // fov wobble reference
+    flash_ = zoom_ = swing_ = false;
+    swing_cos_ = 1.0f;
+    spin_rate_ = kLoopSpinRate;
     g.Fogfv(GL_FOG_COLOR, kFogColor);
 }
 
@@ -157,7 +167,7 @@ void ChipCity::swing(float b) {
     b_swing_ = b;
 }
 
-ChipCity::Camera ChipCity::camera(float b0, float b, float swing_cos) {
+ChipCity::Camera ChipCity::camera(float b0, float b, float swing_cos, float spin_rate) {
     Pc53 pc;
     Camera c;
     const float s = (float)crt_cos((float)(((ld)b0 - (ld)b) * (ld)kEighth));    // 0x43a9e4
@@ -165,7 +175,7 @@ ChipCity::Camera ChipCity::camera(float b0, float b, float swing_cos) {
     c.cam_y = (float)((ld)kThree - (ld)kTwo * (ld)s);                         // 0x4451d8
     c.cam_z = (float)((ld)kTwo * (ld)s + (ld)kCamZ);                          // 0x4451dc
     c.tilt = (float)((ld)kTiltAmp * (ld)s + (ld)kTilt);                       // 0x4451e0
-    c.spin = (float)(((ld)b0 - (ld)b) * (ld)kSpinRate + (ld)kSpin +
+    c.spin = (float)(((ld)b0 - (ld)b) * (ld)spin_rate + (ld)kSpin +
                      (ld)swing_cos * (ld)kDeg180);                            // 0x4451e4
     return c;
 }
@@ -226,7 +236,7 @@ void ChipCity::frame(GlSink& g, float b) {
 
     // 0x425970: the chip grid (0x445214 set, 0x44521c clear in this scene).
     g.Disable(GL_BLEND);
-    const Camera cam = camera(b0_, b, swing_cos_);
+    const Camera cam = camera(b0_, b, swing_cos_, spin_rate_);
     const float cam_x = 0.0f;                                                        // 0x4451d4
     const double top = (double)((ld)kTwo * (ld)kThreeQuarters);                      // fstpl -0x1c8
     const float chip_y = (float)((ld)kTwo * (ld)kTenth + (ld)top);                   // 0x43a9ac

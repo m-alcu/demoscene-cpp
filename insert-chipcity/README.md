@@ -15,13 +15,19 @@ Visuals only: the intro's XM player is not ported.
 
 ```bash
 cmake -S . -B build && cmake --build build -j
-./build/insert-chipcity [--scale N]            # Space pause, R restart, F fullscreen, Esc quit
-./build/insert-chipcity --dump DIR --fps 50 --frames 768   # 800x500 PPMs, hidden window
+./build/insert-chipcity [--original] [--scale N]   # Space pause, R restart, F fullscreen, Esc quit
+./build/insert-chipcity --dump DIR --fps 50 [--original]  # one loop of 800x500 PPMs, hidden window
 ctest --test-dir build                          # ~2 s
 ```
 
-The scene renders at the original 800x500 into a framebuffer object, scaled to the window. It
-loops.
+The scene renders at the original 800x500 into a framebuffer object, scaled to the window.
+
+By default the camera flight loops seamlessly (not in the original). The block wave, the camera
+bob and the fov wobble all repeat after a phase of 16π, i.e. 28.8 s. The spin is slowed from
+8 to 360/(16π) degrees per radian of phase, 12.5°/s, so it makes exactly one turn in that time.
+The start flash and zoom and the closing swing are left out. `--original` plays the scene as in
+the intro (15.36 s with flash, zoom and swing, then it restarts); that is the path the tests
+check.
 
 ## How exact
 

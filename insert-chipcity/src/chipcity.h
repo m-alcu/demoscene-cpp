@@ -7,7 +7,6 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
 
 #include "gl_sink.h"
 
@@ -19,6 +18,12 @@ constexpr double kRow = 0.06;               // speed 3 at 125 BPM: 3 * 2.5/125 s
 constexpr double kSceneStart = 4 * 64 * kRow;           // order 4 row 0  (15.36 s)
 constexpr double kSwingStart = (7 * 64 + 0x36) * kRow;  // order 7 row 0x36 (30.12 s)
 constexpr double kSceneEnd = 8 * 64 * kRow;             // order 8 row 0  (30.72 s)
+
+// Circular mode (not in the original): the wave, the camera bob and the fov wobble all repeat
+// after a phase of 16*pi, i.e. 28.8 s; the spin is slowed from 8 to 360/(16*pi) degrees per
+// radian of phase so that it makes exactly one turn in that time.
+constexpr double kLoopLen = 16 * 180 / 100.0;           // 28.8 s
+constexpr float kLoopSpinRate = 7.16197243f;            // 22.5/pi
 
 // Phase b for program time t (s), as the original computes it each frame.
 float phase(float t);
@@ -33,6 +38,9 @@ public:
     void start(GlSink& g, float b);
     // The order 7 row 0x36 handler: starts the closing camera swing / white-out at phase b.
     void swing(float b);
+    // Circular mode: starts a seamless loop at phase b (no flash, zoom pulse or swing; spin
+    // at kLoopSpinRate). Emits glFogfv like start().
+    void start_circular(GlSink& g, float b);
 
     // One frame at phase b (everything up to, not including, the buffer swap).
     void frame(GlSink& g, float b);
@@ -43,7 +51,7 @@ public:
         float amp, cam_y, cam_z, tilt, spin;
     };
     // Camera of a frame at phase b (scene start b0, swing factor 0x4452a0).
-    static Camera camera(float b0, float b, float swing_cos);
+    static Camera camera(float b0, float b, float swing_cos, float spin_rate = 8.0f);
     // Height of grid cell (i, j).
     static float height(float b0, float b, float amp, int i, int j);
     // 0x4452a0 while the swing runs.
@@ -59,6 +67,7 @@ private:
     bool swing_ = false;    // 0x445298
     float swing_cos_ = 1;   // 0x4452a0
     float fov_ = 60;        // 0x43a9e8
+    float spin_rate_ = 8;   // 0x437374, kLoopSpinRate in circular mode
 };
 
 // Wine's glu32 gluPerspective (with Wine msvcrt's musl sin/cos), as traced.
