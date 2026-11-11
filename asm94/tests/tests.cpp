@@ -1,17 +1,19 @@
-// The port checked against the original, as the analysis harness in
-// ../../rea/asm94-analisis ran it (tests/data, from make_test_ref.py there):
+// The port checked frame by frame against references (tests/data) taken
+// from the earlier version of the port, which modelled the VGA and the GUS
+// at the port level and matched the original under the analysis harness
+// (../../rea/asm94-analisis) frame by frame and GUS write by GUS write:
 //
-//  - full.bin: a CRC-32 of the picture (the bytes the CRTC reads, with the
-//    pel panning and overscan colour) and of the DAC for each frame over
-//    400 s (the intro loops its text until Esc);
+//  - full.bin: a CRC-32 of the picture shown (320 x lines palette indices)
+//    and of the palette for each frame over 400 s (the intro loops its
+//    text until Esc);
 //  - esc400.bin, esc900.bin, esc3000.bin: the same with Esc pressed at
 //    those frames (the turning words, the title, the text writer), to the
-//    intro's end;
-//  - gus.bin: the music's writes to the GUS (voice, register, value) over
-//    the 400 s, a CRC-32 per 10000 of them.
+//    intro's end.
+//
+// Each file: "A94P", the frame count, then two CRCs a frame (little-endian
+// 32-bit words). The music has no reference: the mixer is not the GUS.
 //
 // Usage: asm94_tests <project dir>
-#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -57,27 +59,20 @@ uint32_t u32(const std::vector<uint8_t>& b, size_t at) {
     return v;
 }
 
-struct Run {
-    std::vector<uint32_t> frames;       // picture, DAC, a frame after another
-    std::vector<uint8_t> gus;           // (int32 voice, int32 register, uint32 value) records
-};
-
 // The intro headless for SECONDS (or to its end), Esc down from the middle
-// of the frame before ESC for three frames (none if negative).
-Run run(const std::vector<uint8_t>& image, double seconds, long esc) {
-    Run r;
+// of the frame before ESC for three frames (none if negative): picture,
+// palette, a frame after another.
+std::vector<uint32_t> run(const std::vector<uint8_t>& image, double seconds, long esc) {
+    std::vector<uint32_t> r;
     asm94::Machine m(image);
     asm94::Demo demo(m);
-    m.gus.log = [&](double, int voice, int reg, uint32_t v) {
-        const int32_t rec[3] = {voice, reg, (int32_t)v};
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(rec);
-        r.gus.insert(r.gus.end(), p, p + 12);
-    };
-    m.frame = [&](long n, uint16_t start, uint8_t pan) {
-        std::vector<uint8_t> px;
-        if (m.vga.mode() == 0x13) px = m.vga.scanout(start, pan);
-        r.frames.push_back(crc32(px.data(), px.size()));
-        r.frames.push_back(crc32(m.vga.dac(), 768));
+    std::vector<uint8_t> px;
+    m.frame = [&](long n) {
+        int lines = 0;
+        px.clear();
+        if (m.screen.graphics) m.picture(px, lines);
+        r.push_back(crc32(px.data(), px.size()));
+        r.push_back(crc32(m.screen.palette, 768));
         if (esc >= 0 && n + 1 == esc) m.press(1);
         if (esc >= 0 && n + 1 == esc + 3) m.press(0x81);
     };
@@ -87,11 +82,15 @@ Run run(const std::vector<uint8_t>& image, double seconds, long esc) {
     return r;
 }
 
-void frames(const std::string& name, const std::vector<uint8_t>& ref, const Run& r) {
-    const long n = u32(ref, 4), got = (long)r.frames.size() / 2;
+void frames(const std::string& name, const std::vector<uint8_t>& ref, const std::vector<uint32_t>& r) {
+    if (ref.size() < 8 || u32(ref, 0) != 0x50343941u) {
+        check(false, name + ": no reference");
+        return;
+    }
+    const long n = u32(ref, 4), got = (long)r.size() / 2;
     long bad = -1;
     for (long i = 0; i < n && i < got && bad < 0; i++)
-        if (u32(ref, 8 + i * 8) != r.frames[2 * i] || u32(ref, 12 + i * 8) != r.frames[2 * i + 1]) bad = i;
+        if (u32(ref, 8 + i * 8) != r[2 * i] || u32(ref, 12 + i * 8) != r[2 * i + 1]) bad = i;
     char what[160];
     if (bad >= 0) std::snprintf(what, sizeof what, "%s: frame %ld differs", name.c_str(), bad);
     else std::snprintf(what, sizeof what, "%s: %ld frames (the port made %ld)", name.c_str(), n, got);
@@ -107,34 +106,11 @@ int main(int argc, char** argv) {
         std::printf("FAIL %s/data/asm94.img missing (tools/extract_assets.py)\n", dir.c_str());
         return 1;
     }
-    const auto full = readFile(dir + "/tests/data/full.bin");
-    const auto gus = readFile(dir + "/tests/data/gus.bin");
-    if (full.size() < 8 || gus.size() < 4) {
-        std::printf("FAIL %s/tests/data incomplete\n", dir.c_str());
-        return 1;
-    }
-    // 400 s: the frames and the music
-    {
-        const Run r = run(image, 400.0, -1);
-        frames("400 s", full, r);
-        const size_t n = u32(gus, 0), got = r.gus.size() / 12;
-        bool ok = got == n;
-        for (size_t k = 0; ok && k * 10000 < n; k++) {
-            const size_t len = std::min<size_t>(10000, n - k * 10000);
-            ok = crc32(&r.gus[k * 120000], len * 12) == u32(gus, 4 + k * 4);
-        }
-        check(ok, "the music: " + std::to_string(n) + " GUS writes (the port made " + std::to_string(got) + ")");
-    }
+    frames("400 s", readFile(dir + "/tests/data/full.bin"), run(image, 400.0, -1));
     // Esc in each part: the intro ends there
-    for (long k : {400L, 900L, 3000L}) {
-        const auto ref = readFile(dir + "/tests/data/esc" + std::to_string(k) + ".bin");
-        if (ref.size() < 8) {
-            check(false, "tests/data/esc" + std::to_string(k) + ".bin");
-            continue;
-        }
-        const Run r = run(image, 120.0, k);
-        frames("Esc at frame " + std::to_string(k), ref, r);
-    }
+    for (long k : {400L, 900L, 3000L})
+        frames("Esc at frame " + std::to_string(k), readFile(dir + "/tests/data/esc" + std::to_string(k) + ".bin"),
+               run(image, 120.0, k));
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

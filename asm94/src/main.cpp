@@ -3,10 +3,10 @@
 // Pixel/FC, music Purple Motion/FC).
 //
 // Usage: asm94 [--data DIR] [--scale N] [--mute]
-//        asm94 --dump DIR --seconds S [--keys F,...] [--wav FILE] [--gus FILE]
+//        asm94 --dump DIR --seconds S [--keys F,...] [--wav FILE]
 //            (no window: DIR/frames.txt, a line per frame: number, CRC-32 of
-//            the picture as the CRTC reads it, CRC-32 of the DAC; Esc down at
-//            the frames listed; the music to a WAV; the GUS register writes)
+//            the picture (palette indices), CRC-32 of the palette; Esc down
+//            at the frames listed; the music to a WAV)
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -82,25 +82,28 @@ int window(asm94::Machine& m, int scale, bool mute) {
     SDL_Window* win = SDL_CreateWindow("Assembly '94", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
     SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
     SDL_SetRenderLogicalPresentation(ren, 320, 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-    SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, 320, 240);
+    SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, 320, 480);
     SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
     SDL_AudioStream* audio = nullptr;
     std::vector<float> pcm;
-    int rate = 0;
-    // the picture of the frame last taken (320 x 200 or 240), with its border
-    std::vector<uint8_t> shown(320 * 240 * 3, 0), px;
+    if (!mute) {
+        const SDL_AudioSpec spec{SDL_AUDIO_F32, 2, asm94::Mixer::kRate};
+        audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+        if (audio) SDL_ResumeAudioStreamDevice(audio), m.pcm = &pcm;
+        else std::fprintf(stderr, "asm94: no audio (%s)\n", SDL_GetError());
+    }
+    // the picture of the frame last taken (320 x 200, 240 or 480), as RGB
+    std::vector<uint8_t> shown(320 * 480 * 3, 0), px;
     int sh = 240;
     bool graphics = false;
-    m.frame = [&](long, uint16_t start, uint8_t pan) {
-        graphics = m.vga.mode() == 0x13;
+    m.frame = [&](long) {
+        graphics = m.screen.graphics;
         if (!graphics) return;
-        int w, h;
-        m.vga.picture(start, pan, px, w, h);
-        sh = std::min(h, 240);
-        const uint8_t* dac = m.vga.dac();
+        m.picture(px, sh);
+        const uint8_t* pal = m.screen.palette;
         for (int i = 0; i < 320 * sh; i++)
             for (int k = 0; k < 3; k++) {
-                const uint8_t c = dac[px[i] * 3 + k] & 0x3F;
+                const uint8_t c = pal[px[i] * 3 + k];
                 shown[i * 3 + k] = (uint8_t)(c << 2 | c >> 4);
             }
     };
@@ -114,22 +117,12 @@ int window(asm94::Machine& m, int scale, bool mute) {
             if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.scancode == SDL_SCANCODE_ESCAPE) m.press(1);
             if (e.type == SDL_EVENT_KEY_UP && e.key.scancode == SDL_SCANCODE_ESCAPE) m.press(0x81);
         }
-        // the GUS's output rate follows its active voices: the stream opened
-        // (or reopened) at it
-        if (!mute && (int)m.gus.rate() != rate) {
-            rate = (int)m.gus.rate();
-            if (audio) SDL_DestroyAudioStream(audio);
-            const SDL_AudioSpec spec{SDL_AUDIO_F32, 2, rate};
-            audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
-            if (audio) SDL_ResumeAudioStreamDevice(audio), m.pcm = &pcm;
-            else std::fprintf(stderr, "asm94: no audio (%s)\n", SDL_GetError()), mute = true;
-        }
         pcm.clear();
         if (!m.run(step / fps)) break;
         if (audio) {
             SDL_PutAudioStreamData(audio, pcm.data(), (int)(pcm.size() * sizeof(float)));
             // the music paces the steps: at most three steps' worth queued
-            const int ahead = (int)(3 * rate / fps) * 2 * (int)sizeof(float);
+            const int ahead = (int)(3 * asm94::Mixer::kRate / fps) * 2 * (int)sizeof(float);
             while (running && SDL_GetAudioStreamQueued(audio) > ahead) SDL_Delay(1);
         } else {
             const Uint64 due = t0 + (Uint64)(step / fps * freq), now = SDL_GetPerformanceCounter();
@@ -159,7 +152,7 @@ int window(asm94::Machine& m, int scale, bool mute) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string data, dump, gusFile, wav;
+    std::string data, dump, wav;
     double seconds = 0;
     int scale = 3;
     bool mute = false;
@@ -170,7 +163,6 @@ int main(int argc, char** argv) {
         if (a == "--data") data = next();
         else if (a == "--dump") dump = next();
         else if (a == "--seconds") seconds = std::stod(next());
-        else if (a == "--gus") gusFile = next();
         else if (a == "--wav") wav = next();
         else if (a == "--scale") scale = std::max(1, std::atoi(next().c_str()));
         else if (a == "--mute") mute = true;
@@ -184,7 +176,7 @@ int main(int argc, char** argv) {
             }
         } else {
             std::fprintf(stderr, "usage: asm94 [--data DIR] [--scale N] [--mute]\n"
-                                 "       asm94 --dump DIR --seconds S [--keys F,...] [--wav FILE] [--gus FILE]\n");
+                                 "       asm94 --dump DIR --seconds S [--keys F,...] [--wav FILE]\n");
             return 1;
         }
     }
@@ -200,30 +192,16 @@ int main(int argc, char** argv) {
         m.start([&] { demo.main(); });
         return window(m, scale, mute);
     }
-    FILE* gus = gusFile.empty() ? nullptr : std::fopen(gusFile.c_str(), "w");
-    if (gus) m.gus.log = [gus](double t, int v, int r, uint32_t val) { std::fprintf(gus, "%.17g %d %x %x\n", t, v, r, val); };
     FILE* out = std::fopen((dump + "/frames.txt").c_str(), "w");
-    // ASM94_RAW=f1,f2,...: those frames' scanout and DAC to DIR/raw_NNNNN.bin
-    std::set<long> raw;
-    if (const char* r = SDL_getenv("ASM94_RAW"))
-        for (const char* p = r; *p;) {
-            raw.insert(std::atol(p));
-            while (*p && *p != ',') p++;
-            if (*p) p++;
-        }
-    m.frame = [&](long n, uint16_t start, uint8_t pan) {
+    if (!out) {
+        std::fprintf(stderr, "cannot write %s/frames.txt\n", dump.c_str());
+        return 1;
+    }
+    m.frame = [&](long n) {
         std::vector<uint8_t> px;
-        if (m.vga.mode() == 0x13) px = m.vga.scanout(start, pan);
-        std::fprintf(out, "%ld %08x %08x\n", n, crc32(px.data(), px.size()), crc32(m.vga.dac(), 768));
-        if (raw.count(n)) {
-            char name[64];
-            std::snprintf(name, sizeof name, "/raw_%05ld.bin", n);
-            if (FILE* o = std::fopen((dump + name).c_str(), "wb")) {
-                std::fwrite(px.data(), 1, px.size(), o);
-                std::fwrite(m.vga.dac(), 1, 768, o);
-                std::fclose(o);
-            }
-        }
+        int lines = 0;
+        if (m.screen.graphics) m.picture(px, lines);
+        std::fprintf(out, "%ld %08x %08x\n", n, crc32(px.data(), px.size()), crc32(m.screen.palette, 768));
         // Esc down in the middle of the frame before each frame listed, up three on
         if (keys.count(n + 1)) m.press(1);
         if (keys.count(n + 1 - 3)) m.press(0x81);
@@ -233,8 +211,7 @@ int main(int argc, char** argv) {
     m.start([&] { demo.main(); });
     m.run(seconds);
     m.stop();
-    if (!wav.empty()) writeWav(wav, pcm, (int)m.gus.rate());
+    if (!wav.empty()) writeWav(wav, pcm, asm94::Mixer::kRate);
     std::fclose(out);
-    if (gus) std::fclose(gus);
     return 0;
 }

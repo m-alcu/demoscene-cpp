@@ -10,101 +10,94 @@ struct Patch {
     uint32_t off;
     std::vector<uint8_t> bytes;
 };
-struct GusReg {
-    int voice, reg;
-    uint32_t value;
-};
-struct DramByte {
-    uint32_t addr;
-    uint8_t value;
-};
 #include "runtime.inc"
-// What PMODE and the sound card set-up leave by 4007h (from the harness)
+// What PMODE and the sound card set-up leave by 4007h
 const Patch kRuntime[] = {RUNTIME_MEMORY};
-const GusReg kGusRegs[] = {RUNTIME_GUS_REGS};
-const DramByte kGusDram[] = {RUNTIME_GUS_DRAM};
 
-// The harness's clock is an instruction count at 10^13 a second: a jump to
-// time T lands on the next count, (floor(T x 10^13) + 1) / 10^13.
+constexpr double kPit = 1193182.0;
+
+// The refresh: dots a line x lines a frame / dot clock, and the vertical
+// retrace's lines. Text mode: 28.322 MHz, 900 x 449; 320 x 200: 25.175
+// MHz, 800 x 449; Mode X: 25.175 MHz, 800 x 527. Two lines of retrace.
+constexpr double kTextPeriod = 900.0 * 449 / 28.322e6, kTextRetrace = 2.0 / 449;
+constexpr double kMode13Period = 800.0 * 449 / 25.175e6, kMode13Retrace = 2.0 / 449;
+constexpr double kModeXPeriod = 800.0 * 527 / 25.175e6, kModeXRetrace = 2.0 / 527;
+
+// A jump to time T lands on the next tick of a 10^13 Hz clock (as the
+// harness the port was checked with counted time).
 double quantize(double t) { return (double)((int64_t)(t * 1e13) + 1) / 1e13; }
 }  // namespace
 
 Machine::Machine(const std::vector<uint8_t>& image) : mem(kMemSize, 0) {
     std::memcpy(mem.data(), image.data(), std::min(image.size(), (size_t)kMemSize));
     for (const Patch& p : kRuntime) std::memcpy(&mem[p.off], p.bytes.data(), p.bytes.size());
-    for (const GusReg& g : kGusRegs) gus.loadReg(g.voice, g.reg, g.value);
-    for (const DramByte& d : kGusDram) gus.loadDram(d.addr, d.value);
-    gus.select(kRuntimeGusReg, kRuntimeGusVoice);
-    // the harness at time 0: the BIOS's tick (65536) and the CRTC's first
-    // frame in mode 3 from 0
-    nextTick_ = 65536 / kPit;
-    double per, vr;
-    vga.timing(per, vr);
-    lastVstart_ = 0;
-    vrEnd_ = vr * per;
-    nextVstart_ = per;
-    nextVsync_ = per / 2;
+    // at time 0: the BIOS's tick (65536), the first frame of the text screen
+    pitPer_ = 65536 / kPit;
+    pitNext_ = pitPer_;
+    period_ = kTextPeriod, retrace_ = kTextRetrace;
+    vrEnd_ = retrace_ * period_;
+    nextVstart_ = period_;
+    nextVsync_ = period_ / 2;
 }
 
 Machine::~Machine() { stop(); }
 
-// --- ports ---------------------------------------------------------------------
+// --- the screen ------------------------------------------------------------------
 
-void Machine::out8(uint16_t p, uint8_t v) {
-    if (p >= 0x3C0 && p <= 0x3DF) {
-        vga.out(p, v);
-    } else if (p == 0x20 || p == 0xA0) {
-        if (v == 0x20)                          // EOI: the highest priority in service
-            for (int n = 0; n < 16; n++)
-                if (inService_ >> n & 1) {
-                    inService_ &= (uint16_t)~(1 << n);
-                    break;
-                }
-    } else if (p == 0x21 || p == 0xA1) {
-        picMask_[p == 0xA1] = v;
-    } else if (p == 0x43) {
-        if ((v >> 6) == 0 && (v & 0x30)) {
-            pitBytes_.clear();
-            pitLoading_ = true;
-            const int m = (v >> 1) & 7;
-            pitMode_ = m >= 6 ? m - 4 : m;
-        }
-    } else if (p == 0x40 && pitLoading_) {
-        pitBytes_.push_back(v);
-        if (pitBytes_.size() == 2) {
-            pitDiv_ = (pitBytes_[0] | pitBytes_[1] << 8) ? (pitBytes_[0] | pitBytes_[1] << 8) : 65536;
-            pitLoading_ = false;
-            nextTick_ = t_ + pitDiv_ / kPit;
-        }
-    } else if (p >= 0x220 && p <= 0x32F) {
-        audioTo(t_);
-        gus.out8(p, v, t_);
+void Machine::textMode() {
+    screen.graphics = false;
+    period_ = kTextPeriod, retrace_ = kTextRetrace;
+}
+
+void Machine::graphicsMode() {
+    screen.graphics = true;
+    std::fill(screen.vram.begin(), screen.vram.end(), 0);
+    screen.start = 0, screen.pan = 0;
+    screen.pitch = 320, screen.lines = 200;
+    period_ = kMode13Period, retrace_ = kMode13Retrace;
+}
+
+void Machine::modeXTiming() { period_ = kModeXPeriod, retrace_ = kModeXRetrace; }
+
+void Machine::picture(std::vector<uint8_t>& px, int& lines) const {
+    lines = screen.lines;
+    px.resize((size_t)320 * lines);
+    for (int y = 0; y < lines; y++) {
+        const uint32_t row = shownStart_ + (uint32_t)(y * screen.pitch + shownPan_);
+        for (int x = 0; x < 320; x++) px[(size_t)y * 320 + x] = screen.vram[(row + x) & (kVramSize - 1)];
     }
 }
 
-void Machine::out16(uint16_t p, uint16_t v) {
-    if (p == 0x324) {
-        audioTo(t_);
-        gus.out16(p, v, t_);
-        return;
-    }
-    out8(p, (uint8_t)v);
-    out8((uint16_t)(p + 1), (uint8_t)(v >> 8));
+// --- timers, interrupts, keyboard ---------------------------------------------------
+
+void Machine::setPit(uint16_t divisor) {
+    pitPer_ = (divisor ? divisor : 65536) / kPit;
+    pitNext_ = t_ + pitPer_;
 }
 
-uint8_t Machine::in8(uint16_t p) {
-    if (p == 0x3DA) return poll3da();
-    if (p >= 0x3C0 && p <= 0x3DF) return vga.in(p);
-    if (p == 0x21) return picMask_[0];
-    if (p == 0xA1) return picMask_[1];
-    if (p == 0x60) return kbdData_;
-    if (p >= 0x220 && p <= 0x32F) return gus.in8(p, t_);
-    return 0xFF;
+// The music timer counts from its start: its interrupts stay on the grid
+// t0 + k x period (with some slack on an edge).
+void Machine::startMusicTimer(uint8_t count) {
+    setMusicTimer(count);
+    musicT0_ = t_;
+    musicNext_ = t_ + musicPer_;
 }
 
-uint16_t Machine::in16(uint16_t p) {
-    const uint8_t lo = in8(p);
-    return (uint16_t)(lo | in8((uint16_t)(p + 1)) << 8);
+void Machine::rearmMusicTimer() {
+    musicNext_ = musicT0_ + musicPer_ * ((long)((t_ - musicT0_) / musicPer_ + 1e-6) + 1);
+}
+
+void Machine::mask(int irq, bool masked) {
+    if (masked) masks_ |= (uint16_t)(1 << irq);
+    else masks_ &= (uint16_t)~(1 << irq);
+}
+
+void Machine::eoi() {
+    for (int n = 0; n < 16; n++)
+        if (inService_ >> n & 1) {
+            inService_ &= (uint16_t)~(1 << n);
+            break;
+        }
 }
 
 void Machine::keys(std::vector<std::pair<double, uint8_t>> k) {
@@ -113,26 +106,31 @@ void Machine::keys(std::vector<std::pair<double, uint8_t>> k) {
 }
 
 void Machine::audioTo(double t) {
-    if (!pcm) return;
-    const int64_t end = (int64_t)(t * gus.rate());
-    if (pcmPos_ < 0) {                          // from the first write on
-        pcmPos_ = end;
-        return;
-    }
+    const int64_t end = (int64_t)(t * Mixer::kRate);
     if (end <= pcmPos_) return;
-    const size_t o = pcm->size();
-    pcm->resize(o + 2 * (size_t)(end - pcmPos_), 0.0f);
-    gus.render(&(*pcm)[o], (int)(end - pcmPos_));
+    const int n = (int)(end - pcmPos_);
+    float* out;
+    if (pcm) {
+        const size_t o = pcm->size();
+        pcm->resize(o + 2 * (size_t)n, 0.0f);
+        out = &(*pcm)[o];
+    } else {
+        scratch_.assign(2 * (size_t)n, 0.0f);
+        out = scratch_.data();
+    }
+    mixer_.render(out, n);
     pcmPos_ = end;
 }
 
 // --- the waits -------------------------------------------------------------------
 
-double Machine::nextEvent() const { return if_ ? std::min(nextTick_, gus.nextIrq()) : 1e9; }
+double Machine::nextEvent() const {
+    if (!if_) return 1e9;
+    return musicNext_ < 0 ? pitNext_ : std::min(pitNext_, musicNext_);
+}
 
-uint8_t Machine::poll3da() {
-    vga.resetFlip();
-    uint8_t v = t_ < vrEnd_ ? 0x09 : 0;
+bool Machine::inRetrace() {
+    int v = t_ < vrEnd_;
     if (v == last3da_) {
         if (++same3da_ >= 3) {
             // just past the edge (1 ns)
@@ -143,7 +141,7 @@ uint8_t Machine::poll3da() {
                 wait(ev);                       // an interrupt comes first
             } else {
                 wait(target);
-                v ^= 0x09;
+                v ^= 1;
             }
         }
     } else {
@@ -187,16 +185,15 @@ void Machine::wait(double target) {
     deliver();
 }
 
-// What has come due by now, in the harness's order (emu.py advance).
+// What has come due by now: the timers, keys, frames.
 void Machine::advance() {
     const double t = t_;
-    if (t >= nextTick_) {
-        if (pitMode_ == 0 || pitMode_ == 1) nextTick_ = 1e9;
-        while (nextTick_ <= t) nextTick_ += pitDiv_ / kPit;
+    if (t >= pitNext_) {
+        while (pitNext_ <= t) pitNext_ += pitPer_;
         pending_ |= 1;
     }
-    if (gus.nextIrq() <= t) {
-        gus.irqDue(t);
+    if (musicNext_ >= 0 && musicNext_ <= t) {
+        while (musicNext_ <= t) musicNext_ += musicPer_;
         pending_ |= 1 << 11;
     }
     while (!keys_.empty() && keys_.front().first <= t) {
@@ -206,18 +203,16 @@ void Machine::advance() {
     }
     while (t >= nextVstart_ || t >= nextVsync_) {
         if (nextVstart_ <= nextVsync_) {
-            lastVstart_ = nextVstart_;
-            double per, vr;
-            vga.timing(per, vr);
-            vrEnd_ = lastVstart_ + vr * per;
-            nextVstart_ = lastVstart_ + per;
-            nextVsync_ = lastVstart_ + per / 2;
-            shown_ = vga.startAddress();
-            shownPan_ = vga.panning();
+            const double vstart = nextVstart_;
+            vrEnd_ = vstart + retrace_ * period_;
+            nextVstart_ = vstart + period_;
+            nextVsync_ = vstart + period_ / 2;
+            shownStart_ = screen.start;
+            shownPan_ = screen.pan;
         } else {
             nextVsync_ = 1e9;                   // till the next frame starts
             vsyncs_++;
-            if (frame) frame(vsyncs_ - 1, shown_, shownPan_);
+            if (frame) frame(vsyncs_ - 1);
         }
     }
 }
@@ -230,7 +225,7 @@ void Machine::deliver() {
     for (int n = 0; n < 16; n++) {
         const uint16_t bit = (uint16_t)(1 << n);
         if (!(pending_ & bit)) continue;
-        if (picMask_[n >> 3] >> (n & 7) & 1) continue;
+        if (masks_ & bit) continue;
         if (inService_ & ((bit << 1) - 1)) return;
         pending_ &= (uint16_t)~bit;
         inService_ |= bit;
@@ -262,6 +257,8 @@ bool Machine::run(double until) {
     allowed_ = until;
     cv_.notify_all();
     cv_.wait(l, [&] { return done_ || (blocked_ && blockedAt_ > allowed_); });
+    // the program waits past UNTIL: nothing changes the sound before it
+    if (!done_) audioTo(until);
     return !done_;
 }
 

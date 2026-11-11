@@ -1,22 +1,25 @@
-// Mikko Sairio's "Player 1.68r" (2EDD0h-31FA0h), its GUS half: a 4-channel
-// module (a ProTracker module packed: 31 sample headers, the order list,
-// patterns packed into bytes and unpacked to 5 bytes a note, the samples'
-// bytes XORed with 25h) played by GUS timer 1's interrupt.
+// Mikko Sairio's "Player 1.68r" (2EDD0h-31FA0h), its GUS half, playing on
+// the port's mixer: a 4-channel module (a ProTracker module packed: 31
+// sample headers, the order list, patterns packed into bytes and unpacked
+// to 5 bytes a note, the samples' bytes XORed with 25h) played by the
+// music timer's interrupt (GUS timer 1's in the original). Each channel
+// has two voices (+39h: 0-3, 10h-13h).
 //
 // Its variables (offsets in the flat segment):
 //   31FC8h tempo      3289Ch the timer's count for it   328D7h tick  328D8h speed
 //   328C0h orders     328C4h patterns   328C8h this pattern   328CCh row
 //   328CDh order      328CFh channels   328D3h song length    328D9h volume
-//   32074h samples, 30h each: +0 start (GUS DRAM, less 1), +4 end, +8
+//   32074h samples, 30h each: +0 start (less 1), +4 end, +8
 //          finetune x 2, +0Ah loop length, +0Ch volume, +0Eh loop start
+//          (addresses in the mixer's sample memory)
 //   32644h channels, 40h each: the sample's 0Eh bytes, +0Ch volume, +10h
 //          tone portamento's target, +12h period, +14h frequency, +16h a
 //          start to play from (-1: none), +20h effect, +21h parameter, +22h
 //          flags (1: a new period, 4: vibrato), +23h vibrato, +24h its
 //          place, +29h sample, +2Ah the volume sent, +2Ch loop start, +30h
 //          note, +32h the frequency sent, +34h a delayed note, +39h voice
-// The GUS's ports from the variables at 32852h-32870h, as found at set-up.
 #include <cstdio>
+#include <utility>
 
 #include "demo.h"
 
@@ -25,15 +28,6 @@ namespace asm94 {
 namespace {
 void notReached(uint32_t a) { std::fprintf(stderr, "asm94: player code %05Xh not ported\n", a); }
 }  // namespace
-
-// The ports: [3286Ah] voice select (base+102h), [3286Ch] register select
-// (+103h), +104h data low, [32870h] data high (+105h), [3285Eh] IRQ status
-#define SEL m_.r16(0x3286C)
-#define DATA m_.r16(0x32870)
-
-void Demo::gusDelay() {
-    for (int i = 0; i < 7; i++) in(0x300);
-}
 
 // --- loading ---------------------------------------------------------------------------
 
@@ -79,7 +73,7 @@ void Demo::loadModule() {
     m_.w32(0x2FCAF, m_.r32(0x328C4));
     m_.w32(0x2FCB3, (m_.r8(0x328CF) * patterns) << 6);
     unpackPatterns();
-    // the samples: their headers to 32074h, their bytes to the GUS
+    // the samples: their headers to 32074h, their bytes to the mixer
     edi = 0x32074;
     esi = mod;
     m_.w8(0x2FDF8, 0x1F);
@@ -102,7 +96,7 @@ void Demo::loadModule() {
             }
             m_.w8(edi + 0x0C, m_.r8(esi + 3));
             m_.w16(edi + 8, (uint16_t)((int16_t)(int8_t)(m_.r8(esi + 2) << 4) >> 3));
-            // 2FDFDh: the bytes un-XORed in place, then to the GUS
+            // 2FDFDh: the bytes un-XORed in place, then to the mixer
             const uint32_t src = m_.r32(0x2FCAB);
             for (uint32_t i = 0; i < len; i++) m_.w8(src + i, m_.r8(src + i) ^ 0x25);
             m_.w32(0x2FCAB, src + len);
@@ -168,28 +162,12 @@ void Demo::unpackPatterns() {
     m_.w32(0x2FCAB, esi);
 }
 
-// 2FEBEh: [328B0h] bytes from ESI to the GUS's DRAM at [2FEBAh] on
+// 2FEBEh: [328B0h] bytes from ESI to the sample memory at [2FEBAh] on
 void Demo::upload(uint32_t esi) {
-    uint32_t ebx = m_.r32(0x2FEBA);
-    const uint32_t ecx = m_.r32(0x328B0);
     m_.cli();
-    const uint16_t sel = SEL;
-    out(sel, 0x44);
-    out((uint16_t)(sel + 2), (uint8_t)(ebx >> 16));
-    uint16_t bp = (uint16_t)(ebx >> 16), bx = (uint16_t)ebx;
-    for (uint32_t n = ecx; n; n--) {
-        out(sel, 0x43);
-        outw((uint16_t)(sel + 1), bx);
-        out((uint16_t)(sel + 4), m_.r8(esi++));
-        if (++bx == 0) {
-            bp++;
-            out(sel, 0x44);
-            out((uint16_t)(sel + 2), (uint8_t)bp);
-        }
-    }
+    m_.mixer().load(m_.r32(0x2FEBA), &m_.mem[esi], m_.r32(0x328B0));
     m_.sti();
     m_.w32(0x2FEBA, m_.r32(0x2FEBA) + m_.r32(0x328B0));
-    (void)ebx;
 }
 
 void Demo::loadInit() {
@@ -249,98 +227,41 @@ void Demo::volume(uint32_t esi) {
     m_.w8(esi + 8, (uint8_t)((m_.r8(esi - 0x16) * m_.r8(0x328D9)) >> 6));
 }
 
+// the timer at [3289Ch] (80 us units to 256), its IRQ ([32896h]) unmasked
 void Demo::startTimer() {
     m_.cli();
-    uint16_t ax = (uint16_t)(in(0xA1) << 8 | in(0x21));
-    ax &= (uint16_t)~(1 << m_.r8(0x32896));
-    out(0x21, (uint8_t)ax);
-    out(0xA1, (uint8_t)(ax >> 8));
-    m_.w8(0x31EE1, m_.r8(0x31EE1) | 4);
-    m_.w8(0x31EE3, m_.r8(0x31EE3) | 1);
-    const uint16_t sel = SEL;
-    out(sel, 0x46);
-    out((uint16_t)(sel + 2), (uint8_t)m_.r16(0x3289C));
-    out(sel, 0x45);
-    out((uint16_t)(sel + 2), m_.r8(0x31EE1));
-    const uint16_t adlib = m_.r16(0x32860);
-    out(adlib, 4);
-    out((uint16_t)(adlib + 1), m_.r8(0x31EE3));
+    m_.mask(m_.r8(0x32896), false);
+    m_.startMusicTimer((uint8_t)m_.r16(0x3289C));
     m_.sti();
 }
 
+// the timer stopped; 3012Fh: the voices silenced
 void Demo::stopTimer() {
     m_.cli();
-    m_.w8(0x31EE1, m_.r8(0x31EE1) & 0xFB);
-    m_.w8(0x31EE3, m_.r8(0x31EE3) & 0xFE);
-    const uint16_t sel = SEL;
-    out(sel, 0x45);
-    out((uint16_t)(sel + 2), m_.r8(0x31EE1));
-    silence();
+    m_.stopMusicTimer();
+    m_.mixer().stopAll();
     m_.sti();
-}
-
-// 3012Fh: the GUS reset, its 32 voices stopped
-void Demo::silence() {
-    const uint16_t bx = SEL, cx = DATA;
-    out(bx, 0x4C), out(cx, 0);
-    gusDelay(), gusDelay();
-    out(bx, 0x4C), out(cx, 1);
-    gusDelay(), gusDelay();
-    out(bx, 0x41), out(cx, 0);
-    out(bx, 0x45), out(cx, 0);
-    out(bx, 0x49), out(cx, 0);
-    out(bx, 0x0E), out((uint16_t)(bx + 2), 0x1F | 0xC0);
-    in(m_.r16(0x3285E));
-    out(bx, 0x41), in(cx);
-    out(bx, 0x49), in(cx);
-    out(bx, 0x8F), in(cx);
-    for (uint16_t v = 0; v != 0x20; v++) {
-        const uint16_t dx = m_.r16(0x3286A);
-        out(dx, (uint8_t)v);
-        out((uint16_t)(dx + 1), 9);
-        outw((uint16_t)(dx + 2), 0);
-        out((uint16_t)(dx + 1), 0);
-        out((uint16_t)(dx + 3), 3);
-        out((uint16_t)(dx + 1), 0x0D);
-        out((uint16_t)(dx + 3), 3);
-    }
-    out(bx, 0x41), in(cx);
-    out(bx, 0x49), in(cx);
-    out(bx, 0x8F), in(cx);
-    out(bx, 0x4C), out(cx, 7);
-    out(m_.r16(0x32852), 9);
 }
 
 // --- the interrupt ------------------------------------------------------------------------
 
-// 31EE7h: timer 1 acknowledged and restarted, its count set anew when the
-// tempo changed; a tick every 4th interrupt (2nd above tempo 7Dh)
-void Demo::gusIrq() {
-    const uint8_t st = in(m_.r16(0x3285E));
-    m_.w8(0x31EE0, st);
-    if (st & 4) {
-        const uint16_t sel = SEL;
-        out(sel, 0x45);
-        m_.w8(0x31EE1, m_.r8(0x31EE1) & 0xFB);
-        out((uint16_t)(sel + 2), m_.r8(0x31EE1));
-        m_.w8(0x31EE1, m_.r8(0x31EE1) | 4);
-        out((uint16_t)(sel + 2), m_.r8(0x31EE1));
+// 31EE7h: the timer restarted, its count set anew when the tempo changed;
+// a tick every 4th interrupt (2nd above tempo 7Dh). (An interrupt left
+// from a stopped timer is only acknowledged.)
+void Demo::musicIrq() {
+    if (m_.musicTimerOn()) {
+        m_.rearmMusicTimer();
         const uint8_t tempo = m_.r8(0x31FC8);
         if (m_.r8(0x31EE4) != tempo) {
             m_.w8(0x31EE4, tempo);
-            out(sel, 0x46);
-            out((uint16_t)(sel + 2), (uint8_t)m_.r16(0x3289C));
-            m_.w8(0x31EE6, 3);
-            if (m_.r8(0x31FC8) > 0x7D) m_.w8(0x31EE6, 1);
+            m_.setMusicTimer((uint8_t)m_.r16(0x3289C));
+            m_.w8(0x31EE6, tempo > 0x7D ? 1 : 3);
         }
         m_.w8(0x31EE5, m_.r8(0x31EE5) + 1);
         if (!(m_.r8(0x31EE5) & m_.r8(0x31EE6))) tick();
     }
-    const uint16_t sel = SEL;
-    out(sel, 0x8F);
-    in((uint16_t)(sel + 2));
-    if (m_.r8(0x32896) > 7) out(0xA0, 0x20);
-    out(0x20, 0x20);
+    if (m_.r8(0x32896) > 7) m_.eoi();           // the slave's, then the master's
+    m_.eoi();
     m_.sti();
 }
 
@@ -417,14 +338,14 @@ void Demo::tick() {
     // every tick: the effects, the voices
     uint32_t esi = 0x32664;
     for (uint32_t ecx = nch; ecx; ecx--) {
-        out(m_.r16(0x3286A), m_.r8(esi + 0x19));
+        voice_ = m_.r8(esi + 0x19) & 31;
         const uint16_t ax = m_.r16(esi);
         esi += 2;
         m_.w8(esi, m_.r8(esi) & 0xFB);
         tickEffect(esi, ecx, ax);
         esi -= 0x22;
         if (m_.r8(esi + 0x22) & 1) period(esi);
-        // 3113Ah: the GUS's voice
+        // 3113Ah: the voice
         const int sh = (int)((m_.r8(0x328CF) - ecx) & 0x1F);
         const uint16_t bit = (uint16_t)(1u << (sh & 15) | 1u >> ((16 - (sh & 15)) & 15));
         if (!(m_.r16(0x328D4) & (uint16_t)(1u << (sh % 16)))) notReached(0x31163);
@@ -432,30 +353,25 @@ void Demo::tick() {
         if (m_.r32(esi + 0x16) != 0xFFFFFFFFu) {
             // a note starts: the old voice ramped down, the other of the
             // channel's two voices started
-            rampVolume(esi, 0);
+            // started (31D12h, 31D4Ch: from +16h, looping from +2Ch to +4
+            // if it has a loop length)
+            rampVolume(0);
             m_.w8(esi + 0x39, m_.r8(esi + 0x39) ^ 0x10);
-            out(m_.r16(0x3286A), m_.r8(esi + 0x39));
-            gusDelay();
-            voiceStop();
-            setLoop(esi);
-            setPos(esi);
+            voice_ = m_.r8(esi + 0x39) & 31;
+            m_.mixer().start(voice_, m_.r32(esi + 0x16), m_.r32(esi + 0x2C), m_.r32(esi + 4), m_.r16(esi + 0x0A) != 0);
             m_.w16(esi + 0x32, 0xFFFF);
-            voiceMode(m_.r16(esi + 0x0A) ? 8 : 0);
             m_.w32(esi + 0x16, 0xFFFFFFFFu);
         }
         const uint16_t f = m_.r16(esi + 0x14);
         if (f != m_.r16(esi + 0x32)) {
             m_.w16(esi + 0x32, f);
-            setFreq(f);
+            m_.mixer().frequency(voice_, f);    // 31D36h
         }
         const uint16_t bx = m_.r16(m_.r8(esi + 0x2A) * 2u + 0x3326C);
-        const uint16_t sel = SEL;
-        out(sel, 0x89);
-        const uint16_t cur = m_.in16((uint16_t)(sel + 1));
+        const uint16_t cur = m_.mixer().volume(voice_);
         if (cur != bx) {
-            out(sel, 0x0D);
-            out((uint16_t)(sel + 2), 3);
-            rampTo(cur, bx, sel);
+            m_.mixer().holdVolume(voice_);
+            rampTo(cur, bx);
         }
         esi += 0x60;
     }
@@ -525,72 +441,23 @@ void Demo::period(uint32_t esi) {
     m_.w8(esi + 0x22, m_.r8(esi + 0x22) & 0xFE);
 }
 
-void Demo::setPos(uint32_t esi) {
-    const uint16_t sel = SEL;
-    out(sel, 0x0A);
-    outw((uint16_t)(sel + 1), (uint16_t)(m_.r32(esi + 0x16) >> 7));
-    out(sel, 0x0B);
-    outw((uint16_t)(sel + 1), (uint16_t)(m_.r32(esi + 0x16) << 9));
-}
-
-void Demo::setFreq(uint16_t ax) {
-    const uint16_t sel = SEL;
-    out(sel, 1);
-    outw((uint16_t)(sel + 1), ax);
-}
-
-void Demo::setLoop(uint32_t esi) {
-    const uint16_t sel = SEL;
-    out(sel, 2);
-    outw((uint16_t)(sel + 1), (uint16_t)(m_.r32(esi + 0x2C) >> 7));
-    out(sel, 3);
-    outw((uint16_t)(sel + 1), (uint16_t)(m_.r32(esi + 0x2C) << 9));
-    out(sel, 4);
-    outw((uint16_t)(sel + 1), (uint16_t)(m_.r32(esi + 4) >> 7));
-    out(sel, 5);
-    outw((uint16_t)(sel + 1), (uint16_t)(m_.r32(esi + 4) << 9));
-}
-
 // 31DA0h: a ramp to volume table entry AL from the voice's volume now
-void Demo::rampVolume(uint32_t, uint8_t al) {
+void Demo::rampVolume(uint8_t al) {
     const uint16_t bx = m_.r16(al * 2u + 0x3326C);
-    const uint16_t sel = SEL;
-    out(sel, 0x0D);
-    out((uint16_t)(sel + 2), 3);
-    out(sel, 0x89);
-    const uint16_t ax = m_.in16((uint16_t)(sel + 1));
-    rampTo(ax, bx, sel);
+    m_.mixer().holdVolume(voice_);
+    rampTo(m_.mixer().volume(voice_), bx);
 }
 
 // 31DCBh: from AX (the volume now) to BX: set at once if the high bytes
-// agree, else a ramp between them, up or down (rate 3Fh)
-void Demo::rampTo(uint16_t ax, uint16_t bx, uint16_t dx) {
+// agree, else a ramp between them, up or down
+void Demo::rampTo(uint16_t ax, uint16_t bx) {
     if ((ax >> 8) == (bx >> 8)) {
-        out(dx, 9);
-        outw((uint16_t)(dx + 1), bx);
+        m_.mixer().setVolume(voice_, bx);
         return;
     }
-    m_.w8(0x31E1B, 0);
-    if (!((ax >> 8) < (bx >> 8))) {
-        std::swap(ax, bx);
-        m_.w8(0x31E1B, 0x40);
-    }
-    out(dx, 7), out((uint16_t)(dx + 2), (uint8_t)(ax >> 8));
-    out(dx, 8), out((uint16_t)(dx + 2), (uint8_t)(bx >> 8));
-    out(dx, 6), out((uint16_t)(dx + 2), 0x3F);
-    out(dx, 0x0D), out((uint16_t)(dx + 2), m_.r8(0x31E1B));
-}
-
-void Demo::voiceStop() {
-    const uint16_t sel = SEL;
-    out(sel, 0);
-    out((uint16_t)(sel + 2), 3);
-}
-
-void Demo::voiceMode(uint8_t bl) {
-    const uint16_t sel = SEL;
-    out(sel, 0);
-    out((uint16_t)(sel + 2), bl);
+    const bool down = !((ax >> 8) < (bx >> 8));
+    if (down) std::swap(ax, bx);
+    m_.mixer().ramp(voice_, (uint8_t)(ax >> 8), (uint8_t)(bx >> 8), down);
 }
 
 // --- the effects ------------------------------------------------------------------------------

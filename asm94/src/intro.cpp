@@ -7,7 +7,7 @@ namespace asm94 {
 Demo::Demo(Machine& m) : m_(m) {
     m_.irq0 = [this] { timer(); };
     m_.irq11 = [this] {
-        if (irq11Vector_ == 0x31EE7) gusIrq();
+        if (irq11Vector_ == 0x31EE7) musicIrq();
         else m_.ack(11);                        // PMODE's default: the BIOS's
     };
 }
@@ -15,19 +15,19 @@ Demo::Demo(Machine& m) : m_(m) {
 // --- helpers ------------------------------------------------------------------------
 
 void Demo::waitFrame() {
-    while (in(0x3DA) & 8) {
+    while (m_.inRetrace()) {
     }
-    while (!(in(0x3DA) & 8)) {
+    while (!m_.inRetrace()) {
     }
 }
 
 void Demo::waitRetrace() {
-    while (!(in(0x3DA) & 8)) {
+    while (!m_.inRetrace()) {
     }
 }
 
 void Demo::waitDisplay() {
-    while (in(0x3DA) & 8) {
+    while (m_.inRetrace()) {
     }
 }
 
@@ -47,17 +47,13 @@ uint16_t Demo::sine(uint16_t ax) {
 
 void Demo::setStart(uint16_t bx) {
     m_.cli();
-    outw(0x3D4, (uint16_t)((bx & 0xFF00) | 0x0C));
-    outw(0x3D4, (uint16_t)((bx & 0xFF) << 8 | 0x0D));
+    m_.screen.start = px(bx);
     m_.sti();
 }
 
 void Demo::hpan(uint16_t bx) {
     m_.cli();
-    in(0x3DA);
-    out(0x3C0, 0x33);
-    out(0x3C0, (uint8_t)bx);
-    out(0x3C0, 0x20);
+    m_.screen.pan = (bx & 7) >> 1;
     m_.sti();
 }
 
@@ -74,8 +70,7 @@ void Demo::flip() {
 }
 
 void Demo::palette(uint32_t src, int first, int n) {
-    out(0x3C8, (uint8_t)first);
-    for (int i = 0; i < n * 3; i++) out(0x3C9, m_.r8(src + i));
+    for (int i = 0; i < n; i++, src += 3) m_.setColor(first + i, m_.r8(src), m_.r8(src + 1), m_.r8(src + 2));
 }
 
 // --- the timer --------------------------------------------------------------------
@@ -88,18 +83,13 @@ void Demo::timer() {
 
 void Demo::setPit() {
     m_.cli();
-    out(0x43, 0x36);
-    const uint16_t ax = m_.r16(0x354C);
-    out(0x40, (uint8_t)ax);
-    out(0x40, (uint8_t)(ax >> 8));
+    m_.setPit(m_.r16(0x354C));
     m_.sti();
 }
 
 void Demo::biosTimer() {
     m_.cli();
-    out(0x43, 0x36);
-    out(0x40, 0xFF);
-    out(0x40, 0xFF);
+    m_.setPit(0xFFFF);
     setIrq0(m_.r32(0x35D2));
     m_.sti();
 }
@@ -108,7 +98,7 @@ void Demo::biosTimer() {
 // (+10h a tick, its sign changing the part's phase at 35D1h), the music's
 // poll every 9th tick, the BIOS's clock every 35h.
 void Demo::timer354E() {
-    out(0x20, 0x20);
+    m_.eoi();
     m_.sti();
     m_.w16(0x2083, m_.r16(0x2083) + 0x10);
     bool check = true;
@@ -168,7 +158,7 @@ void Demo::timer3BA2() {
         }
         ellipse();
     }
-    out(0x20, 0x20);
+    m_.eoi();
     m_.w8(0x35CF, m_.r8(0x35CF) + 0x21);         // (its carry: the BIOS's clock)
     m_.sti();
 }
@@ -233,25 +223,22 @@ void Demo::main() {
     m_.w8(0x2EFFC, m_.r8(0x2EFFC) ^ 1);
     for (int i = 0; i < 0x8C; i++) waitFrame();
     modeX();
-    // the screen's address into the code that draws the ellipse
-    for (uint32_t a : {0x3DE5u, 0x3DEFu, 0x3DF9u, 0x3E03u, 0x3E6Eu, 0x3E78u, 0x3E82u, 0x3E8Cu})
-        m_.w32(a, m_.r32(0xC86) + 0x8A3D);
-    for (uint32_t a : {0x3C8Bu, 0x3C95u, 0x3CB3u, 0x3CBDu, 0x3D50u, 0x3D5Au, 0x3D78u, 0x3D82u})
-        m_.w32(a, kVram + 0x228F);
+    // (here the original patches the screen's address into the ellipse's
+    // code: ellipseDraw() has it)
     m_.w8(0x328D9, 0x40);
     if (m_.r8(0x32073) != 0) {
         m_.w32(0x332F2, 0x33300);
         playerLoad();
     }
     m_.cli();
-    out(0x21, in(0x21) | 2);
+    m_.mask(1, true);                           // the keyboard's IRQ
     m_.sti();
     logo();
     for (int i = 0; i < 0x23; i++) waitFrame();
     waitFrame();
     palette(0x1E6F, 0, 0x10);
     setStart(0xA500);
-    outw(0x3D4, 0x2813);
+    m_.screen.pitch = 320;
     m_.cli();
     m_.w32(0x35D2, irq0Vector_);
     m_.w16(0x3558, m_.r16(0x1E));
@@ -278,41 +265,30 @@ void Demo::main() {
     biosTimer();
     playerStop();
     m_.cli();
-    out(0x21, in(0x21) & 0xFD);
+    m_.mask(1, false);
     m_.sti();
     exitToDos();
 }
 
 void Demo::exitToDos() {
-    m_.vga.setMode(3);
+    m_.textMode();
     m_.exit();
 }
 
-// 0BF4h: mode 13h by the BIOS, then unchained with 480-line timing (CRTC
-// table at 0C24h), all of video memory cleared
+// 0BF4h: mode 13h by the BIOS, then unchained with 480-line timing (the
+// CRTC table at 0C24h): 320 x 240, rows 352 pixels apart; video memory
+// cleared. [0C86h], the screen's address, is video memory's offset 0 here.
 void Demo::modeX() {
-    m_.vga.setMode(0x13);
-    outw(0x3C4, 0x0604);
-    outw(0x3C4, 0x0100);
-    out(0x3C2, 0xE3);
-    outw(0x3C4, 0x0300);
-    out(0x3D4, 0x11);
-    out(0x3D5, in(0x3D5) & 0x7F);
-    for (int i = 0; i < 11; i++) outw(0x3D4, m_.r16(0xC24 + 2 * i));
-    outw(0x3C4, 0x0F02);
-    m_.w32(0xC86, kVram);
-    for (uint32_t i = 0; i < 0x3E80; i++) m_.w32(kVram + 4 * i, 0);
+    m_.graphicsMode();
+    m_.modeXTiming();
+    m_.screen.lines = 240;
+    m_.screen.pitch = 352;
+    m_.w32(0xC86, 0);
 }
 
-// 35D6h: the picture (four planes interleaved at 26950h) to BAE0h on
-void Demo::logo() {
-    const uint32_t ebx = m_.r32(0xC86) + 0xBAE0;
-    for (int p = 0; p < 4; p++) {
-        mapMask((uint8_t)(1 << p));
-        uint32_t esi = 0x26950 + p, edi = ebx;
-        for (int i = 0; i < 0x19A0; i++, esi += 4) m_.w8(edi++, m_.r8(esi));
-    }
-}
+// 35D6h: the picture (26950h: its pixels, as Mode X's planes interleave
+// them) to BAE0h on
+void Demo::logo() { m_.copy(px(m_.r32(0xC86) + 0xBAE0), 0x26950, 0x19A0 * 4); }
 
 // --- the words ------------------------------------------------------------------------
 
@@ -325,13 +301,11 @@ void Demo::words() {
         setStart(0xA500);
         waitRetrace();
         palette(0x1E6F, 0, 0x10);
-        outw(0x3D4, 0x2813);
+        m_.screen.pitch = 320;
         waitFrame();
-        out(0x3C8, 0);
-        for (int i = 0; i < 0x30; i++) out(0x3C9, 0);
-        outw(0x3D4, 0x2C13);
-        mapMask(0x0F);
-        for (uint32_t i = 0; i < 0x2940; i++) m_.w32(m_.r32(0xC86) + 4 * i, 0);
+        for (int i = 0; i < 0x10; i++) m_.setColor(i, 0, 0, 0);
+        m_.screen.pitch = 352;
+        m_.fill(px(m_.r32(0xC86)), px(0xA500), 0);
         setStart(0);
         const uint32_t ebx = m_.r32(0x2085);
         m_.w32(0x1CA9, m_.r32(ebx * 4 + 0x2089));
@@ -341,17 +315,16 @@ void Demo::words() {
         // coming in: the colours brighten with the time
         do {
             flip();
-            out(0x3C8, 1);
             const int32_t b = ((int32_t)(int16_t)m_.r16(0x2083) + 0x3FFF) >> 8;
-            for (uint32_t eax = 7; !(eax & 0x40); eax += 8) {
+            for (uint32_t eax = 7, c = 1; !(eax & 0x40); eax += 8, c++) {
                 const uint8_t v = (uint8_t)((eax * (uint32_t)b) >> 6);
-                out(0x3C9, v), out(0x3C9, v), out(0x3C9, v);
+                m_.setColor((int)c, v, v, v);
             }
             wordsClear();
             wordsErase0();
             wordsProject();
             wordsDraw();
-            if (in(0x60) == 1) {
+            if (m_.key() == 1) {
                 m_.w8(0x3F1B, 1);
                 return;
             }
@@ -359,20 +332,19 @@ void Demo::words() {
         // going: they darken
         do {
             flip();
-            out(0x3C8, 1);
             uint16_t bx = (uint16_t)(0x3FFF - m_.r16(0x2083));
             int32_t b = (int16_t)bx;
             if (bx >= 0x4000) b = 0;
             b >>= 8;
-            for (uint32_t eax = 7; !(eax & 0x40); eax += 8) {
+            for (uint32_t eax = 7, c = 1; !(eax & 0x40); eax += 8, c++) {
                 const uint8_t v = (uint8_t)((eax * (uint32_t)b) >> 6);
-                out(0x3C9, v), out(0x3C9, v), out(0x3C9, v);
+                m_.setColor((int)c, v, v, v);
             }
             wordsClear();
             wordsErase1();
             wordsProject();
             wordsDraw();
-            if (in(0x60) == 1) {
+            if (m_.key() == 1) {
                 m_.w8(0x3F1B, 1);
                 return;
             }
@@ -435,21 +407,20 @@ void Demo::wordsDraw() {
     } while (m_.r16(0x1CB1) != 0);
 }
 
+// column EAX (pixels from the left of the screen's middle row) of the back
+// page, ECX rows tall about that row
 void Demo::wordsColumn(uint32_t eax, uint32_t esi) {
-    mapMask((uint8_t)(1 << (eax & 3)));
-    eax = (uint32_t)((int32_t)eax >> 2);
-    uint32_t ecx = m_.r32(esi) << 1;
+    const uint32_t ecx = m_.r32(esi) << 1;
     if (!ecx) return;
-    uint32_t edi = eax + m_.r32(0xC8A) + 0x2968;
-    edi -= ecx * 44;
-    wordsScale(edi, m_.r32(0x1CAD), ecx);
+    wordsScale(px(m_.r32(0xC8A) + 0x2968 - ecx * 44) + eax, m_.r32(0x1CAD), ecx);
 }
 
-// 1CB7h: a 60-pixel column (ESI) drawn ECX tall (rows 58h apart). Taller:
+// 1CB7h: a 60-pixel column (ESI) drawn ECX tall from pixel P down (rows 352
+// pixels apart). Taller:
 // each source pixel the quotient times (an unrolled run entered through a
 // jump displacement the code patches at 1D22h), once more as the
 // remainder adds up. Shorter: pixels skipped (the step patched at 1D44h).
-void Demo::wordsScale(uint32_t edi, uint32_t esi, uint32_t ecx) {
+void Demo::wordsScale(uint32_t p, uint32_t esi, uint32_t ecx) {
     if (ecx >= 0x3C) {
         const uint32_t q = ecx / 0x3C, edx = ecx % 0x3C;
         int32_t acc = (int32_t)(edx >> 1);
@@ -458,11 +429,11 @@ void Demo::wordsScale(uint32_t edi, uint32_t esi, uint32_t ecx) {
         const int writes = (0x1D14 - (0x1D23 + disp)) / 4;   // the run's pairs from where it is entered
         for (int n = 0; n < 0x3C; n++) {
             const uint8_t al = m_.r8(esi++);
-            for (int k = 0; k < writes; k++) m_.w8(edi, al), edi += 0x58;
+            for (int k = 0; k < writes; k++) m_.pixel(p) = al, p += 352;
             acc -= (int32_t)edx;
             if (acc < 0) {
                 acc += 0x3C;
-                m_.w8(edi, al), edi += 0x58;
+                m_.pixel(p) = al, p += 352;
             }
         }
     } else {
@@ -471,8 +442,8 @@ void Demo::wordsScale(uint32_t edi, uint32_t esi, uint32_t ecx) {
         m_.w32(0x1D44, q - 1);
         const uint32_t step = m_.r32(0x1D44);
         for (uint32_t n = ecx; n; n--) {
-            m_.w8(edi++, m_.r8(esi++));
-            edi += 0x57;
+            m_.pixel(p) = m_.r8(esi++);
+            p += 352;
             ebp -= (int32_t)edx;
             if (ebp < 0) {
                 esi++;
@@ -489,35 +460,31 @@ void Demo::wordsErase1() {
     int32_t eax = m_.s32(0x1BED) + 0x98;
     if (eax < 0) eax = 0;
     edi += ((uint32_t)eax >> 2) + 0x1028;
-    mapMask(0x0F);
-    for (int i = 0; i < 0x91; i++, edi += 0x58)
-        for (int k = 0; k < 12; k++) m_.w8(edi + k, 0);
+    for (int i = 0; i < 0x91; i++, edi += 0x58) m_.fill(px(edi), 48, 0);
     edi = m_.r32(0xC8A);
     eax = m_.s32(0x1BE9) - 0xA0;
     if (eax >= 0) eax = 0;
     edi += (uint32_t)(eax >> 2) + 0x1074;
-    for (int i = 0; i < 0x91; i++, edi += 0x58)
-        for (int k = 0; k < 8; k++) m_.w8(edi + k, 0);
+    for (int i = 0; i < 0x91; i++, edi += 0x58) m_.fill(px(edi), 32, 0);
     edi = m_.r32(0xC8A);
     m_.w32(0x1BE9, m_.r32(0x1BE9) >> 4);
     if (!m_.r32(0x1BE9)) return;
     const uint32_t ebx = (0x16 - m_.r32(0x1BE9)) << 2;
     edi += 0x1F18;
     for (int i = 0; i < 0x3C; i++) {
-        for (uint32_t k = 0; k < m_.r32(0x1BE9); k++) m_.w32(edi, 0), edi += 4;
+        for (uint32_t k = 0; k < m_.r32(0x1BE9); k++) m_.fill(px(edi), 16, 0), edi += 4;
         edi += ebx;
     }
 }
 
 void Demo::wordsErase0() {
-    mapMask(0x0F);
     uint32_t edi = m_.r32(0xC8A);
     m_.w32(0x1BE9, m_.r32(0x1BE9) >> 4);
     m_.w32(0x1BE9, m_.r32(0x1BE9) + 2);
     const uint32_t ebx = (0x16 - m_.r32(0x1BE9)) << 2;
     edi += 0x1050;
     for (int i = 0; i < 0x91; i++) {
-        for (uint32_t k = 0; k < m_.r32(0x1BE9); k++) m_.w32(edi, 0), edi += 4;
+        for (uint32_t k = 0; k < m_.r32(0x1BE9); k++) m_.fill(px(edi), 16, 0), edi += 4;
         edi += ebx;
     }
 }
@@ -559,32 +526,24 @@ void Demo::fade(uint32_t ebp) {
     }
 }
 
-// 3949h: the title picture (53890h, four planes interleaved) faded in from
-// white, held, its palette set; with the 140 Hz timer (3BA2h) from here on
+// 3949h: the title picture (53890h, 320 x 480) faded in from white, held,
+// its palette set; with the 140 Hz timer (3BA2h) from here on
 void Demo::title() {
     setIrq0(0x3BA2);
     m_.w32(0x3EF8, 2);
     m_.w16(0x354C, 0x214A);
     setPit();
-    outw(0x3D4, 0x2813);
+    m_.screen.pitch = 320;
     setStart(0);
     uint32_t edi = m_.r32(0xC86);
     m_.w32(0x1E6B, edi);
     m_.w32(0xC8A, edi + 0x4B00);
-    mapMask(0x0F);
-    for (uint32_t i = 0; i < 0x2580; i++) m_.w32(m_.r32(0xC86) + 4 * i, 0);
+    m_.fill(px(m_.r32(0xC86)), px(0x9600), 0);
     waitFrame();
-    out(0x3C8, 0);
-    for (int i = 0; i < 0x300; i++) out(0x3C9, 0);
-    outw(0x3D4, 0x4009);
-    for (int p = 0; p < 4; p++) {
-        mapMask((uint8_t)(1 << p));
-        uint32_t d = m_.r32(0xC86), s = 0x53890 + p;
-        for (int i = 0; i < 0x9600; i++, s += 4) m_.w8(d++, m_.r8(s));
-    }
-    in(0x3DA);                                  // the overscan colour
-    out(0x3C0, 0x31);
-    out(0x3C0, 0xFA);
+    for (int i = 0; i < 0x100; i++) m_.setColor(i, 0, 0, 0);
+    m_.screen.lines = 480;                      // no line doubling
+    m_.copy(px(m_.r32(0xC86)), 0x53890, px(0x9600));
+    // (the original sets the border colour to FAh here; the border is not shown)
     const uint32_t white = alloc(0x300);
     if (!white) return;
     m_.w32(0x3B1A, white);
@@ -602,7 +561,7 @@ void Demo::title() {
     palette(0x3649, 0, 0x100);
     for (int i = 0x8C; i; i--) {
         waitFrame();
-        if (in(0x60) == 1) {
+        if (m_.key() == 1) {
             m_.w8(0x3F1B, 1);
             return;
         }
@@ -611,9 +570,9 @@ void Demo::title() {
 
 // --- the invitation screen ------------------------------------------------------------
 
-// 2462h: the title fades to black; the screen (13D50h, four planes
-// interleaved) drawn, its frame (8 x 0Dh dwords a row, A3h rows) filled,
-// scrolled in from the side (pel panning), its palette faded in
+// 2462h: the title fades to black; the screen (13D50h, 320 x 240) drawn,
+// its frame (212 pixels a row, A3h rows) filled, scrolled in from the side
+// (start and pan), its palette faded in
 void Demo::screen() {
     m_.w32(0x245E, 0x2325);
     for (uint32_t ebp = 0; ebp != 0x41; ebp++) {
@@ -623,32 +582,20 @@ void Demo::screen() {
         palette(m_.r32(0x265D), 0, 0x100);
     }
     m_.w32(0x214E, 0x10);
-    in(0x3DA);
-    out(0x3C0, 0x31);
-    out(0x3C0, 0);
-    out(0x3C8, 0);
-    for (int n = 0xFF; n; n--) {
+    {
+        // (and the border colour back to 0) every colour but the last the same
         const uint32_t esi = m_.r32(0x245E);
-        for (int k = 0; k < 3; k++) out(0x3C9, m_.r8(esi + k));
+        for (int i = 0; i < 0xFF; i++) m_.setColor(i, m_.r8(esi), m_.r8(esi + 1), m_.r8(esi + 2));
     }
-    outw(0x3D4, 0x2813);
-    outw(0x3D4, 0x4109);
-    out(0x3D4, 0x11);
-    out(0x3D5, in(0x3D5) & 0x7F);
-    outw(0x3D4, 0x1001);
+    m_.screen.pitch = 320;
+    m_.screen.lines = 240;
+    // (the original narrows the display to 68 pixels here, and widens it
+    // back after the scroll; the port always shows all 320)
     playerPoll();
-    for (int p = 0; p < 4; p++) {
-        mapMask((uint8_t)(1 << p));
-        copyPlanes(0x13D50 + p);
-    }
+    m_.copy(px(m_.r32(0xC86)), 0x13D50, px(0xF0 * 0x50));
     playerPoll();
-    mapMask(0x0F);
     uint32_t edi = m_.r32(0xC86) + 0xB55;
-    for (int r = 0; r < 0xA3; r++) {
-        for (int k = 0; k < 0x0D; k++) m_.w32(edi, 0x08080808u), edi += 4;
-        m_.w8(edi, 0x08), edi += 1;
-        edi += 0x1B;
-    }
+    for (int r = 0; r < 0xA3; r++, edi += 0x50) m_.fill(px(edi), 212, 0x08);
     {
         uint32_t ebx = 0x3F;
         auto step = [&](uint32_t b) {                  // 1AF3h
@@ -675,7 +622,6 @@ void Demo::screen() {
         }
         step(0);
     }
-    outw(0x3D4, 0x4F01);
     m_.w32(0x245A, 0x215D);
     for (int32_t ebp = 0x40; ebp >= 0; ebp--) {
         waitDisplay();
@@ -683,15 +629,8 @@ void Demo::screen() {
         waitRetrace();
         palette(m_.r32(0x265D), 1, 0x10);
     }
-    out(0x3C8, 0);
-    for (int i = 0; i < 0x300; i++) out(0x3C9, m_.r8(0x215A + i));
+    palette(0x215A, 0, 0x100);
     free(m_.r32(0x265D));
-}
-
-void Demo::copyPlanes(uint32_t esi) {
-    uint32_t edi = m_.r32(0xC86);
-    for (int r = 0; r < 0xF0; r++)
-        for (int k = 0; k < 0x50; k++, esi += 4) m_.w8(edi++, m_.r8(esi));
 }
 
 // --- the text writer ---------------------------------------------------------------------
@@ -701,17 +640,14 @@ void Demo::copyPlanes(uint32_t esi) {
 // screen; the ellipse turning; Esc fades the palette and the music out
 void Demo::writer() {
     for (uint32_t a = 0x13D50; a < 0x13D50 + 0x12C00; a += 4) m_.w32(a, m_.r32(a) & 0x07070707u);
-    if (m_.r8(0x2EFFC) == 0) {
-        outw(0x3C4, 0x0E04);
-        m_.w32(0x342A, m_.r32(0xC86) + 0x2080);
-        m_.w32(0x3B9E, 0xC8);
-    } else {
-        const uint32_t buf = alloc(0x19C80);
-        if (!buf) return;
-        m_.w32(0x342A, buf);
-        m_.w32(0x342E, buf + 0xCE40);
-        for (uint32_t i = 0; i < 0x6720; i++) m_.w32(buf + 4 * i, 0x08080808u);
-    }
+    // [2EFFCh] is 1 (main() flips it from 0): the text goes to a buffer
+    // first. (With 0 the original writes it straight to the screen in a
+    // chained mode; that path is not ported.)
+    const uint32_t buf = alloc(0x19C80);
+    if (!buf) return;
+    m_.w32(0x342A, buf);
+    m_.w32(0x342E, buf + 0xCE40);
+    for (uint32_t i = 0; i < 0x6720; i++) m_.w32(buf + 4 * i, 0x08080808u);
     const uint32_t pts = alloc(0x320);
     if (!pts) return;
     m_.w32(0x3EF2, pts);
@@ -742,7 +678,7 @@ void Demo::writer() {
                     free(m_.r32(0x3421));
                     return;
                 }
-                if (f < 0 && in(0x60) == 1) m_.w8(0x3429, 0x40);
+                if (f < 0 && m_.key() == 1) m_.w8(0x3429, 0x40);
                 if (m_.r8(0x3EF7) == 1) break;
                 m_.flagWait(0x3EF7, 1);         // one step of time; then the test again
                 if (m_.r8(0x3EF7) == 1) break;
@@ -750,9 +686,9 @@ void Demo::writer() {
             m_.w8(0x3EF7, 0);
             if ((int8_t)m_.r8(0x3429) >= 0) {
                 waitRetrace();
-                out(0x3C8, 0);
                 const uint32_t ebp = m_.r8(0x3429);
-                for (int i = 0; i < 0x2EE; i++) out(0x3C9, (uint8_t)((m_.r8(0x215A + i) * ebp) >> 6));
+                auto dim = [&](uint32_t a) { return (uint8_t)((m_.r8(a) * ebp) >> 6); };
+                for (uint32_t c = 0, a = 0x215A; c < 0xFA; c++, a += 3) m_.setColor((int)c, dim(a), dim(a + 1), dim(a + 2));
                 m_.w8(0x328D9, (uint8_t)ebp);
                 m_.w8(0x3429, m_.r8(0x3429) - 1);
             }
@@ -886,10 +822,9 @@ void Demo::writerClear() {
 }
 
 // 34CAh: the buffer's dwords that changed since the last call (the copy at
-// [342Eh]) to the screen, a dword's four bytes to the four planes
+// [342Eh]) to the screen
 void Demo::writerShow() {
     if (m_.r8(0x2EFFC) == 0) return;
-    out(0x3C4, 2);
     uint32_t esi = m_.r32(0x342A), edi = m_.r32(0x342E), ecx = 0x3390;
     bool zf = true;
     for (;;) {
@@ -903,10 +838,7 @@ void Demo::writerShow() {
         esi -= 4;
         const uint32_t ebp = 0x3BB0 - ecx + m_.r32(0xC86);
         zf = ebp == 0;                          // (the flags of the add)
-        for (int p = 0; p < 4; p++) {
-            out(0x3C5, (uint8_t)(1 << p));
-            m_.w8(ebp, m_.r8(esi++));
-        }
+        for (int p = 0; p < 4; p++) m_.pixel(px(ebp) + p) = m_.r8(esi++);
     }
     const uint32_t a = m_.r32(0x342A), b = m_.r32(0x342E);
     for (uint32_t i = 0; i < 0x3390; i++) m_.w32(b + 4 * i, m_.r32(a + 4 * i));
@@ -926,65 +858,37 @@ void Demo::ellipse() {
     if (m_.r8(0x2EFFC) != 0) ellipseDraw();
 }
 
-// 3C4Ch: each point erased (its four mirror images: colour's high nibble
-// cleared) and drawn at its new place (+10h), through the read map
+// 3C4Ch: each point erased (its four mirror images about the screen's
+// pixel 228Fh x 4: the colour's high nibble cleared) and drawn at its new
+// place (+10h). A point keeps its x and its y x 320 in a dword.
 void Demo::ellipseDraw() {
-    out(0x3C4, 2);
-    m_.w8(0x3DD6, in(0x3C5));
-    out(0x3CE, 4);
-    uint32_t esi = m_.r32(0x3EF2);
-    auto rmw = [&](uint32_t imm, int32_t ebx, int32_t ebp, bool add) {
-        const uint32_t a = (uint32_t)(ebx + ebp) + m_.r32(imm);
-        m_.w8(a, add ? (uint8_t)(m_.r8(a) + 0x10) : (uint8_t)(m_.r8(a) & 0x0F));
+    const uint32_t centre = px(m_.r32(0xC86) + 0x228F);
+    auto mirrors = [&](int32_t y, int32_t x, bool draw) {
+        for (const uint32_t p : {centre + y + x, centre - y + x, centre - y - x, centre + y - x}) {
+            uint8_t& v = m_.pixel(p);
+            v = draw ? (uint8_t)(v + 0x10) : (uint8_t)(v & 0x0F);
+        }
     };
+    uint32_t esi = m_.r32(0x3EF2);
     do {
-        uint32_t eax = m_.r32(esi);
+        const uint32_t eax = m_.r32(esi);
         esi += 4;
-        int32_t ebx = (int16_t)eax;
-        int32_t ecx = (int32_t)eax >> 16, ebp = ecx;
-        out(0x3C5, (uint8_t)(1 << (ecx & 3)));
-        out(0x3CF, (uint8_t)(ecx & 3));
-        ebx >>= 2, ebp >>= 2;
-        rmw(0x3C8B, ebx, ebp, false);
-        ebx = -ebx;
-        rmw(0x3C95, ebx, ebp, false);
-        ecx = -ecx;
-        ebp = ecx >> 2;
-        out(0x3CF, (uint8_t)(ecx & 3));
-        out(0x3C5, (uint8_t)(1 << (ecx & 3)));
-        rmw(0x3CB3, ebx, ebp, false);
-        ebx = -ebx;
-        rmw(0x3CBD, ebx, ebp, false);
+        mirrors((int16_t)eax, (int32_t)eax >> 16, false);
         // the new place
         int16_t di = (int16_t)sine((uint16_t)(m_.r16(0x3EE2) << 6));
         di = (int16_t)(di + (int16_t)cosine((uint16_t)(m_.r16(0x3EE6) << 6)));
         di = (int16_t)(di >> 7);
         int16_t si = (int16_t)sine((uint16_t)(m_.r16(0x3EE4) << 6));
         si = (int16_t)(si + (int16_t)cosine((uint16_t)(m_.r16(0x3EE8) << 6)));
-        const int32_t x = ((int32_t)si * 5) >> 9;
-        ebx = (int32_t)di * 5 * 64;
-        ecx = ebp = x;
-        m_.w32(esi - 4, (uint32_t)x << 16 | (uint16_t)ebx);
-        out(0x3C5, (uint8_t)(1 << (ecx & 3)));
-        out(0x3CF, (uint8_t)(ecx & 3));
-        ebx >>= 2, ebp >>= 2;
-        rmw(0x3D50, ebx, ebp, true);
-        ebx = -ebx;
-        rmw(0x3D5A, ebx, ebp, true);
-        ecx = -ecx;
-        ebp = ecx >> 2;
-        out(0x3CF, (uint8_t)(ecx & 3));
-        out(0x3C5, (uint8_t)(1 << (ecx & 3)));
-        rmw(0x3D78, ebx, ebp, true);
-        ebx = -ebx;
-        rmw(0x3D82, ebx, ebp, true);
+        const int32_t x = ((int32_t)si * 5) >> 9, y = (int32_t)di * 5 * 64;
+        m_.w32(esi - 4, (uint32_t)x << 16 | (uint16_t)y);
+        mirrors(y, x, true);
         m_.w16(0x3EE4, (uint16_t)(m_.r16(0x3EE4) + (int8_t)m_.r8(0x3EEF)));
         m_.w16(0x3EE2, (uint16_t)(m_.r16(0x3EE2) + (int8_t)m_.r8(0x3EEE)));
         m_.w16(0x3EE8, (uint16_t)(m_.r16(0x3EE8) + (int8_t)m_.r8(0x3EF1)));
         m_.w16(0x3EE6, (uint16_t)(m_.r16(0x3EE6) + (int8_t)m_.r8(0x3EF0)));
         m_.w32(0x3DD7, m_.r32(0x3DD7) - 1);
     } while (m_.r32(0x3DD7) != 0);
-    out(0x3C5, m_.r8(0x3DD6));
 }
 
 }  // namespace asm94
