@@ -1,6 +1,6 @@
 # demoscene-cpp
 
-Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos, diskettes y utilidades. Cada proyecto incluye traducciones routine-by-routine del código original, verificadas frame-by-frame contra la ejecución original. Las recreaciones (megablast-blob, megablast-tunnel, tsbdemo) y los efectos propios (gouraud-torus) se indican como tales.
+Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos, diskettes y utilidades. Cada proyecto incluye traducciones routine-by-routine del código original, verificadas frame-by-frame contra la ejecución original. Las recreaciones (megablast-blob, megablast-tunnel, tsbdemo) y los efectos propios (gouraud-torus, plasma-palette, scroll-sprites-raster, tunnel-rotozoom, voxel-landscape) se indican como tales.
 
 ## Proyectos
 
@@ -15,10 +15,14 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 - [**gouraud-torus**](gouraud-torus/) - Efecto propio al estilo 1993-95: toro con sombreado Gouraud, rasterizado por software a 320x200x256 (rampa de paleta, algoritmo del pintor, scanlines en coma fija). Incluye el toro de Cyboman 2 (Complex, 1994) con su malla, sus materiales y sus paletas
 - [**hexappeal**](hexappeal/) - Puerto de la sección final de "HEX APPEAL" (Cascada, 1993)
 - [**insert-chipcity**](insert-chipcity/) - Escena "chip city" del 64K Win32 Insert No Coins (Razor 1911, 2010): las mismas llamadas OpenGL 1.x, float a float, que la traza del original (3005 frames)
+- [**plasma-palette**](plasma-palette/) - Efecto propio al estilo 1992-95: tres plasmas de tablas de senos en bytes, ciclado de paleta y fundidos de 64 pasos entre cuatro paletas, a 320x200x256 y 70 Hz
 - [**projange**](projange/) - Traducción del demo Project Angel (Impact Studios, 1994)
 - [**rbgdemo2**](rbgdemo2/) - Puerto del vector demo "Black Glass ][" (Tran/Renaissance, 1992)
+- [**scroll-sprites-raster**](scroll-sprites-raster/) - Efecto propio al estilo 1990-94: barras raster (color 0 distinto en cada scanline), sprites de bolas sombreadas y un scroller sinusoidal con sombra y degradado cíclico
 - [**show**](show/) - Traducción del demo Show (Majic 12, 1994)
 - [**tsbdemo**](tsbdemo/) - Réplica del demo "The Sound Barrier" (Tran/Renaissance, 1991)
+- [**tunnel-rotozoom**](tunnel-rotozoom/) - Efecto propio al estilo 1993-96: túnel texturizado con tablas precalculadas de ángulo y distancia (centro móvil, niebla por paleta) y rotozoom en coma fija 16.16
+- [**voxel-landscape**](voxel-landscape/) - Efecto propio al estilo Comanche (1992): vuelo sobre un paisaje voxel con heightmap diamond-square, rayos por columna con y-buffer, niebla por paleta y cámara que alabea en los giros
 
 ### Wish (Majic 12, In Bloom '93)
 
