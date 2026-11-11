@@ -5,7 +5,11 @@
 
 namespace knot {
 
-Knot::Knot() {
+Knot::Knot(int res)
+    : res_(res < 1 ? 1 : res > kMaxRes ? kMaxRes : res), w_(W * res_), h_(H * res_),
+      // the screen's centre (160, 100) and the projection's scales, 2 * (240
+      // << 15) and 2 * (200 << 15), in 16.16 (17710h, 17779h); times RES
+      cx_(10485760.0f * res_), cy_(6553600.0f * res_), sx_(15728640.0f * res_), sy_(13107200.0f * res_) {
     precalc();
     // the tube: 48 rings of 6 along the knot, twisted 3.8 radians over its
     // length; once around and seven times along the texture (182FEh)
@@ -50,13 +54,14 @@ void Knot::frame(int32_t clock) {
     }
 
     // the background: the hexagons rocking back and forth, 0.75 radians each
-    // way every 2 T, mirrored at half size
+    // way every 2 T, mirrored at half size (the zoom RES times smaller and the
+    // centre RES times further at a higher resolution)
     F.fld(2.0);
     F.fld(T);
     F.fprem();
     F.fxch(), F.fstp(0);
     F.fadd(-1.0), F.fabs_(), F.fadd(-0.5), F.fmul(1.5);
-    roto(F.fstpf(), (int32_t)0xFFFF8000, 0xA0, 0x64);
+    roto(F.fstpf(), (int32_t)0xFFFF8000 / res_, 0xA0 * res_, 0x64 * res_);
 
     // the camera 3.8 from the centre, looking along +y, rolling slowly
     F.fld(T);
@@ -100,7 +105,7 @@ void Knot::toArgb(uint32_t* out) const {
         auto c = [&](int k) { return (uint32_t)(dac_[3 * i + k] & 0x3F) * 255 / 63; };
         lut[i] = 0xFF000000u | c(0) << 16 | c(1) << 8 | c(2);
     }
-    for (int i = 0; i < W * H; i++) out[i] = lut[fb_[i]];
+    for (int i = 0; i < w_ * h_; i++) out[i] = lut[fb_[i]];
 }
 
 }  // namespace knot

@@ -16,12 +16,16 @@
 
 namespace knot {
 
-constexpr int W = 320, H = 200;
+constexpr int W = 320, H = 200;   // the intro's screen (mode 13h)
+constexpr int kMaxRes = 2;        // a Knot can draw at W*res x H*res, res 1..kMaxRes
 constexpr double kPit = 1193182.0;
 
 class Knot {
 public:
-    Knot();
+    // RES 1 draws as the intro does (320x200, identical to it); 2 draws at
+    // 640x400: the projection, the rotozoomer's grid and its zoom scaled,
+    // the textures the same 256x256 ones.
+    explicit Knot(int res = 1);
     // Draw the frame at CLOCK (PIT ticks since the part began) into the
     // screen, and set the DAC as the intro does at that time.
     void frame(int32_t clock);
@@ -32,9 +36,12 @@ public:
     static constexpr float kEnd = 16.0f;
     bool fadeOut = true;            // false: no fade at T 15-16 (it runs on)
 
-    const uint8_t* screen() const { return fb_; }
+    int res() const { return res_; }
+    int width() const { return w_; }
+    int height() const { return h_; }
+    const uint8_t* screen() const { return fb_; }   // width() x height()
     const uint8_t* dac() const { return dac_; }   // 256 RGB, 6-bit
-    void toArgb(uint32_t* out) const;
+    void toArgb(uint32_t* out) const;               // width() x height()
 
     // the precalculated textures (256x256, row << 8 | column) and palette
     const uint8_t* lightTex() const { return light_; }    // the intro's [2B4C0h] + 60000h
@@ -96,9 +103,11 @@ private:
     void roto(float angle, int32_t zoom, int32_t cx, int32_t cy);
     void mapper(uint32_t u0, uint32_t v0, int32_t du, int32_t dv, int32_t duy, int32_t dvy);
 
+    int res_, w_, h_;
+    float cx_, cy_, sx_, sy_;       // the projection (render) at this resolution
     Fpu F;
     uint8_t light_[0x10000], plasma_[0x10000], hexes_[0x10000];
-    uint8_t pal_[768], dac_[768], fb_[W * H];
+    uint8_t pal_[768], dac_[768], fb_[W * H * kMaxRes * kMaxRes];
 
     // the tube: vertices, normals, texture coordinates (16.16 << 8), faces
     float verts_[kVerts][3], norms_[kVerts][3];

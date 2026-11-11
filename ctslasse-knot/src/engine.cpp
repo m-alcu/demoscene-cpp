@@ -385,13 +385,8 @@ void Knot::sweep(float twist, float phase) {
 
 // --- the scene ---------------------------------------------------------------------------
 
-// The screen: 320x200, its centre (160, 100) in 16.16 as floats; the
-// projection's scales for a field of view of 2 (17710h, 17779h): 240 and
-// 200 pixels (16.16) per unit of x/y and z/y.
-namespace {
-constexpr float kCx = 10485760.0f, kCy = 6553600.0f;      // 160 << 16, 100 << 16
-constexpr float kSx = 15728640.0f, kSy = 13107200.0f;     // 2 * (240 << 15), 2 * (200 << 15)
-}  // namespace
+// The screen: its centre and the projection's scales (field of view 2)
+// are cx_, cy_, sx_, sy_ (16.16 as floats; see the constructor).
 
 // 17658h: a camera at EYE looking at AT, UP up, rolled by ANGLE: the matrix
 // M (rows: right, forward, up; the translation -eye in view space). Leaves
@@ -487,10 +482,10 @@ void Knot::render() {
     for (int i = 0; i < kVerts; i++) {
         if (!vis_[i]) continue;
         const float* v = sv_[i];
-        F.fld(kSy), F.fmul(v[2]), F.fdiv(v[1]), F.fsubr(kCy);
+        F.fld(sy_), F.fmul(v[2]), F.fdiv(v[1]), F.fsubr(cy_);
         F.frndint();
         scr_[i][0] = F.fistp();
-        F.fld(kSx), F.fmul(v[0]), F.fdiv(v[1]), F.fadd(kCx);
+        F.fld(sx_), F.fmul(v[0]), F.fdiv(v[1]), F.fadd(cx_);
         F.frndint();
         scr_[i][1] = F.fistp();
     }
@@ -577,10 +572,10 @@ void Knot::span(int32_t at, int32_t count) {
 // 16601h: a triangle with four attributes. VD: three rows, three columns
 // (16.16), then each attribute's three values. Edges and attributes are
 // stepped in 16.16 down the rows; the attributes' gradients come from the
-// plane through the three vertices; the screen clips at 0..320 x 0..200.
+// plane through the three vertices; the screen clips at 0..w_ x 0..h_.
 void Knot::fill(const int32_t* vd) {
     constexpr int n = 4;
-    constexpr int32_t kLeft = 0, kRight = W, kTop = 0, kBottom = H, kPitch = W;
+    const int32_t kLeft = 0, kRight = w_, kTop = 0, kBottom = h_, kPitch = w_;
     const int32_t* attr = vd + 6;               // attr[3 k + vertex]
     int32_t y0 = vd[0], y1 = vd[1], y2 = vd[2];
     int32_t x0 = vd[3], x1 = vd[4], x2 = vd[5];
@@ -618,7 +613,9 @@ void Knot::fill(const int32_t* vd) {
         d >>= 1;
         const uint32_t det = (uint32_t)d;
         if (det == 0) return;
-        if (det < 0x20000 || det > 0xFFFE0000u) {   // 165E2h: too small: flat
+        // 165E2h: too small: flat (the area in pixels, so RES^2 times larger)
+        const uint32_t tiny = 0x20000u * (uint32_t)(res_ * res_);
+        if (det < tiny || det > 0u - tiny) {
             for (int k = 0; k < n; k++) dAdy[k] = 0, dAdx_[k] = 0;
         } else {
             for (int k = 0; k < n; k++) {
@@ -842,10 +839,10 @@ void mapLoop(Regs& r, const Imm& I, const uint8_t* tex, uint8_t* fb) {
 }
 }  // namespace
 
-// 14BDBh: the hexagons over the screen in 40 x 25 blocks of 8x8, from (U0,
+// 14BDBh: the hexagons over the screen in blocks of 8x8 (40 x 25 at RES 1), from (U0,
 // V0) stepping (DU, DV) a pixel and (DUY, DVY) a row (16.16).
 void Knot::mapper(uint32_t u0, uint32_t v0, int32_t du, int32_t dv, int32_t duy, int32_t dvy) {
-    constexpr int32_t bx = 0x28, by = 0x19, pitch = W;
+    const int32_t bx = 0x28 * res_, by = 0x19 * res_, pitch = w_;
     Imm I;
     I.i14BC6 = pitch;
     const uint32_t A = (uint32_t)du << 16 | (((uint32_t)dv >> 16) & 0xFF);

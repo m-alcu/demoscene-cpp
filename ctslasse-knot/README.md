@@ -18,7 +18,7 @@ the original's**, the picture and the DAC (see Verification).
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
-./build/ctslasse-knot                     # [--scale N] [--loop]
+./build/ctslasse-knot                     # [--hires] [--scale N] [--loop]
 ctest --test-dir build
 ```
 
@@ -31,10 +31,17 @@ over and over.
 |---|---|
 | **L** | endless / the part's timeline, looped |
 | **R** | restart |
+| **T** | show the precalculated textures in the corners: the lighting table (grey), the knot's texture (each ramp's colour), the hexagons, the palette |
 | **Space** / **Esc** | pause / quit |
 
-Headless: `ctslasse-knot --dump DIR [--frames N] [--start SECONDS] [--loop]`
+Headless: `ctslasse-knot --dump DIR [--hires] [--frames N] [--start SECONDS] [--loop]`
 writes N frames at 70 per second as `DIR/fNNNN.ppm`.
+
+`--hires` draws at 640x400 instead of 320x200. The projection, the
+rotozoomer's 8x8 block grid, its zoom and centre, and the filler's
+"flat triangle" threshold are scaled to match. The textures are still the
+same 256x256 tiles, so the edges get sharper but the texels don't. Only
+the 320x200 output is checked against the original.
 
 A frame takes about 1 ms.
 
