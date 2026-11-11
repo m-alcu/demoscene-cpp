@@ -9,15 +9,20 @@ namespace {
 
 constexpr int N = 256, MASK = N - 1;
 constexpr int kWater = 70;               // water level (heights 0-255)
-constexpr int kSky = 192;                // palette 192-255: sky gradient, top to horizon
 constexpr float kFov = 1.1f;             // radians across the screen
 constexpr float kFar = 420;              // view distance in map cells
 constexpr float kScale = 120;            // height -> screen projection
+constexpr float kFogStart = kFar * 0.15f;  // fog-free up to here, full haze at kFar
+constexpr float kFog[3] = {0.80f, 0.85f, 0.95f};  // haze colour, also the sky at the horizon
+constexpr float kSkyRows = 126;          // sky gradient height in rows above the horizon
 
 uint32_t argb(float r, float g, float b) {
     auto c = [](float v) { return (uint32_t)std::clamp((int)std::lround(v * 255), 0, 255); };
     return 0xFF000000u | c(r) << 16 | c(g) << 8 | c(b);
 }
+
+// Sky: deep blue at the top (f = 0) to the haze at the horizon (f = 1).
+uint32_t sky(float f) { return argb(0.15f + 0.65f * f * f, 0.30f + 0.55f * f, 0.65f + 0.30f * f); }
 
 // A small deterministic random generator, so the landscape is the same every run.
 uint32_t rng_state = 0x1234567;
@@ -54,39 +59,26 @@ Demo::Demo() : screen_(W * H), height_(N * N), colour_(N * N) {
         }
     for (int i = 0; i < N * N; i++) height_[i] = (uint8_t)std::max(s[i], kWater);
 
-    // Colour map: 4 bands of 16 shades (water, sand/grass, rock, snow), shaded by the slope
-    // towards the light (from the west: left neighbour higher = darker).
+    // Colour map: 4 bands (water, sand/grass, rock, snow), shaded continuously by the slope
+    // towards the light (from the west: left neighbour higher = darker), stored as ARGB.
+    const float base[4][3] = {{0.10f, 0.30f, 0.60f}, {0.25f, 0.55f, 0.18f}, {0.50f, 0.42f, 0.32f}, {0.92f, 0.94f, 1.0f}};
     for (int y = 0; y < N; y++)
         for (int x = 0; x < N; x++) {
             const int hh = s[y * N + x];
             const int slope = s[y * N + ((x - 1) & MASK)] - s[y * N + ((x + 1) & MASK)];
-            int band, shade;
-            if (hh <= kWater) { band = 0; shade = 8 + std::clamp((kWater - hh) / -6 + 4, -6, 6); }  // deeper = darker
+            int band;
+            float shade;  // 0-15
+            if (hh <= kWater) { band = 0; shade = 8 + std::clamp(4 - (kWater - hh) / 6.0f, -6.0f, 6.0f); }  // deeper = darker
             else {
                 band = hh < 140 ? 1 : hh < 195 ? 2 : 3;
-                shade = std::clamp(8 - slope / 2, 0, 15);
+                shade = std::clamp(8 - slope / 2.0f, 0.0f, 15.0f);
             }
-            colour_[y * N + x] = (uint8_t)(band * 16 + shade);
+            const float l = 0.35f + 0.65f * shade / 15;
+            float c[3];
+            for (int i = 0; i < 3; i++) c[i] = base[band][i] * l;
+            if (band == 1 && shade < 4) for (int i = 0; i < 3; i++) c[i] = c[i] * 0.6f + 0.35f * (i < 2);  // beach tint
+            colour_[y * N + x] = argb(c[0], c[1], c[2]);
         }
-
-    // Palette: the 4 bands, then 3 fog levels mixing towards the horizon colour.
-    const float base[4][3] = {{0.10f, 0.30f, 0.60f}, {0.25f, 0.55f, 0.18f}, {0.50f, 0.42f, 0.32f}, {0.92f, 0.94f, 1.0f}};
-    const float fog[3] = {0.80f, 0.85f, 0.95f};
-    for (int f = 0; f < 3; f++) {
-        const float m = f * 0.33f;  // fog amount
-        for (int b = 0; b < 4; b++)
-            for (int k = 0; k < 16; k++) {
-                const float l = 0.35f + 0.65f * k / 15;
-                float c[3];
-                for (int i = 0; i < 3; i++) c[i] = base[b][i] * l * (1 - m) + fog[i] * m;
-                if (b == 1 && k < 4) for (int i = 0; i < 3; i++) c[i] = c[i] * 0.6f + 0.35f * (1 - m) * (i < 2);  // beach tint
-                pal_[f * 64 + b * 16 + k] = argb(c[0], c[1], c[2]);
-            }
-    }
-    for (int k = 0; k < 64; k++) {  // sky: deep blue at the top to the haze at the horizon
-        const float f = k / 63.0f;
-        pal_[kSky + k] = argb(0.15f + 0.65f * f * f, 0.30f + 0.55f * f, 0.65f + 0.30f * f);
-    }
 }
 
 // One frame of the landscape. horizon is the screen row of the horizon (pitch), bank tilts it
@@ -96,10 +88,8 @@ void Demo::render(float cx, float cy, float angle, float height, float horizon, 
     // the terrain overwrites it below anyway.
     for (int x = 0; x < W; x++) {
         const float hz = horizon + (x - W / 2) * bank;
-        for (int y = 0; y < H; y++) {
-            const int k = std::clamp(63 - (int)((hz - y) * 0.5f), 0, 63);
-            screen_[y * W + x] = (uint8_t)(kSky + k);
-        }
+        for (int y = 0; y < H; y++)
+            screen_[y * W + x] = sky(std::clamp(1 - (hz - y) / kSkyRows, 0.0f, 1.0f));
     }
     for (int x = 0; x < W; x++) {
         const float a = angle + (x - W / 2) * (kFov / W);
@@ -114,8 +104,11 @@ void Demo::render(float cx, float cy, float angle, float height, float horizon, 
             const int i = my * N + mx;
             const int y = (int)((height - height_[i]) * kScale / (z * fish) + hz);
             if (y < ybuf) {
-                const int f = z < kFar * 0.35f ? 0 : z < kFar * 0.65f ? 1 : 2;  // fog level
-                const uint8_t c = (uint8_t)(f * 64 + colour_[i]);
+                // Fog grows linearly with distance, to the full haze colour at kFar.
+                const float m = std::clamp((z - kFogStart) / (kFar - kFogStart), 0.0f, 1.0f);
+                const uint32_t t = colour_[i];
+                auto mix = [&](int shift, float f) { return ((t >> shift & 255) / 255.0f) * (1 - m) + f * m; };
+                const uint32_t c = argb(mix(16, kFog[0]), mix(8, kFog[1]), mix(0, kFog[2]));
                 for (int yy = std::max(y, 0); yy < ybuf; yy++) screen_[yy * W + x] = c;
                 ybuf = std::max(y, 0);
             }
@@ -144,7 +137,7 @@ void Demo::frame() {
 }
 
 void Demo::to_argb(uint32_t* out) const {
-    for (int i = 0; i < W * H; i++) out[i] = pal_[screen_[i]];
+    std::copy(screen_.begin(), screen_.end(), out);
 }
 
 }  // namespace vl

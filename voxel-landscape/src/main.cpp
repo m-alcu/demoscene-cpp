@@ -1,5 +1,5 @@
 // voxel-landscape - a Comanche-style voxel landscape flight in the style of 1992-1996 PC
-// demos (320x200, 256 colours), in C++17 / SDL3.
+// demos (320x200, 32-bit colour), in C++17 / SDL3.
 //
 // Usage: voxel-landscape [--scale N]
 //            keys: Space pause, Esc quit

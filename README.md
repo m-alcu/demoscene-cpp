@@ -22,7 +22,7 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 - [**show**](show/) - Traducción del demo Show (Majic 12, 1994)
 - [**tsbdemo**](tsbdemo/) - Réplica del demo "The Sound Barrier" (Tran/Renaissance, 1991)
 - [**tunnel-rotozoom**](tunnel-rotozoom/) - Efecto propio al estilo 1993-96: túnel texturizado con tablas precalculadas de ángulo y distancia (centro móvil, niebla por paleta) y rotozoom en coma fija 16.16
-- [**voxel-landscape**](voxel-landscape/) - Efecto propio al estilo Comanche (1992): vuelo sobre un paisaje voxel con heightmap diamond-square, rayos por columna con y-buffer, niebla por paleta y cámara que alabea en los giros
+- [**voxel-landscape**](voxel-landscape/) - Efecto propio al estilo Comanche (1992): vuelo sobre un paisaje voxel con heightmap diamond-square, rayos por columna con y-buffer, niebla continua en color de 32 bits y cámara que alabea en los giros
 
 ### Wish (Majic 12, In Bloom '93)
 
