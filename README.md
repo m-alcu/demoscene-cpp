@@ -25,6 +25,12 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 - [**tunnel-rotozoom**](tunnel-rotozoom/) - Efecto propio al estilo 1993-96: túnel texturizado con tablas precalculadas de ángulo y distancia (centro móvil, niebla por paleta) y rotozoom en coma fija 16.16
 - [**voxel-landscape**](voxel-landscape/) - Efecto propio al estilo Comanche (1992): vuelo sobre un paisaje voxel con heightmap diamond-square, rayos por columna con y-buffer, niebla continua en color de 32 bits y cámara que alabea en los giros
 
+### Lasse Reinbøng (Cubic Team & $eeN, 1995)
+
+Partes del 64K sacadas del puerto [ctslasse](ctslasse/), verificadas frame a frame contra el original (`rea/ctslasse-analisis`).
+
+- [**ctslasse-knot**](ctslasse-knot/) - Parte 5: nudo de trébol hecho de un tubo retorcido, con mapa de entorno y textura de ruido fractal sumados, sobre un rotozoom oscilante de hexágonos difuminados; 762 frames idénticos (imagen y DAC). Modo continuo o la parte en bucle
+
 ### Wish (Majic 12, In Bloom '93)
 
 Partes del demo, verificadas contra la ejecución emulada con un modelo del haz por scanline (`rea/wish-analisis`).
