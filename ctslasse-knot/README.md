@@ -31,7 +31,7 @@ over and over.
 |---|---|
 | **L** | endless / the part's timeline, looped |
 | **R** | restart |
-| **C** | 24-bit colour / the intro's 256 colours |
+| **C** | switch the colours: 24-bit / the intro's 256 colours |
 | **T** | show the precalculated textures in the corners: the lighting table (grey), the knot's texture (each ramp's colour), the hexagons, the palette |
 | **Space** / **Esc** | pause / quit |
 
@@ -47,8 +47,8 @@ the 320x200 output is checked against the original.
 It draws in **24-bit colour** by default (see below). `--8bit` (or **C**)
 draws in the intro's 256 colours, which is the picture the tests check.
 
-A frame takes about 2 ms in 256 colours and 3.5 ms in 24-bit at 320x200,
-and 5.5 ms and 12 ms at 640x400.
+A frame takes about 0.4 ms in 256 colours and 0.8 ms in 24-bit at
+320x200, and 1.2 ms and 2.6 ms at 640x400 (Release build).
 
 ### 24-bit colour
 
