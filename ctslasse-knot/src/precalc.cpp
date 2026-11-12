@@ -170,6 +170,11 @@ void Knot::lighting() {
             F.fxch(), F.fadd(30.0);
             F.fld(f50);
             F.fxch();
+            // truecolor: the value unrounded; (round(v) >> 3) is v / 8 - 7/16 on average
+            {
+                const float v = (float)F.fstd() * 0.125f - 0.4375f;
+                lightF_[out - light_] = v < 0 ? 0 : v > 31 ? 31 : v;
+            }
             F.frndint();
             *out++ = (uint8_t)(F.fistp() >> 3);         // +60000h
             F.fxch(2);
@@ -247,6 +252,7 @@ void Knot::palette8() {
         const int32_t g = (i & 1) * 4 + gb;
         const int32_t rr = (k % 3) * 3 + r;
         b += 2, k++, gb += 3;
+        base_[i][0] = (float)rr, base_[i][1] = (float)g, base_[i][2] = (float)bb;
         gradient(dst, 0, 0, 0, rr, g, bb, 0x12);                     // 18547h
         gradient(dst + 0x12 * 3, rr, g, bb, 0x3F, 0x3F, 0x3F, 0x0E);
         r += 4;
@@ -291,6 +297,14 @@ void Knot::precalc() {
     // the background
     hexes(t0, 5, 8, 0x45, 0x4C, 0x54);
     blur(t0, hexes_);
+    // truecolor: the same 3x3 box, not truncated, as the shade in ramp 2 (40h)
+    for (int32_t k = 0; k < 0x10000; k++) {
+        const int32_t r = k >> 8, c = k & 0xFF;
+        int32_t s = 0;
+        for (int32_t dy = -1; dy <= 1; dy++)
+            for (int32_t dx = -1; dx <= 1; dx++) s += t0[((r + dy) & 0xFF) << 8 | ((c + dx) & 0xFF)];
+        hexF_[k] = (float)s / 9.0f - 0x40;
+    }
 
     lighting();
     palette8();

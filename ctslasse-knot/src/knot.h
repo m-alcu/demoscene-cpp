@@ -35,13 +35,18 @@ public:
     static float partTime(int32_t clock);
     static constexpr float kEnd = 16.0f;
     bool fadeOut = true;            // false: no fade at T 15-16 (it runs on)
+    // true: draw in 24-bit colour instead of the intro's 256 (not the
+    // original's picture): the light and the hexagons kept unrounded and
+    // filtered, the 8 ramps evaluated as continuous functions blended
+    // between texels, the fades done per pixel. screen() is then not drawn.
+    bool truecolor = false;
 
     int res() const { return res_; }
     int width() const { return w_; }
     int height() const { return h_; }
     const uint8_t* screen() const { return fb_; }   // width() x height()
     const uint8_t* dac() const { return dac_; }   // 256 RGB, 6-bit
-    void toArgb(uint32_t* out) const;               // width() x height()
+    void toArgb(uint32_t* out) const;               // width() x height(), in either mode
 
     // the precalculated textures (256x256, row << 8 | column) and palette
     const uint8_t* lightTex() const { return light_; }    // the intro's [2B4C0h] + 60000h
@@ -98,16 +103,27 @@ private:
     void render();
     void fill(const int32_t* vd);
     void span(int32_t at, int32_t count);
+    void spanTc(int32_t at, int32_t count);
 
     // the rotozoomer (1B8E3h) and its texture mapper (14BDBh)
     void roto(float angle, int32_t zoom, int32_t cx, int32_t cy);
     void mapper(uint32_t u0, uint32_t v0, int32_t du, int32_t dv, int32_t duy, int32_t dvy);
+    void mapperTc(uint32_t u0, uint32_t v0, int32_t du, int32_t dv, int32_t duy, int32_t dvy);
 
     int res_, w_, h_;
     float cx_, cy_, sx_, sy_;       // the projection (render) at this resolution
     Fpu F;
     uint8_t light_[0x10000], plasma_[0x10000], hexes_[0x10000];
     uint8_t pal_[768], dac_[768], fb_[W * H * kMaxRes * kMaxRes];
+
+    // truecolor: the light (0-31) before its rounding to 5 bits, the hexagons
+    // blurred without truncation (the shade in ramp 2), each ramp's colour
+    // (6-bit, as palette8 makes it), the picture before the fades (ARGB),
+    // and the fades: the share of white (in) and the brightness (out)
+    float lightF_[0x10000], hexF_[0x10000], base_[8][3];
+    uint32_t hexLut_[32 * 128];     // ramp 2 at shades 0-32 in steps of 1/128 (the background)
+    uint32_t tc_[W * H * kMaxRes * kMaxRes];
+    float tcWhite_ = 1.0f, tcBright_ = 1.0f;
 
     // the tube: vertices, normals, texture coordinates (16.16 << 8), faces
     float verts_[kVerts][3], norms_[kVerts][3];

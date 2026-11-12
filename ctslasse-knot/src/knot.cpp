@@ -17,6 +17,8 @@ Knot::Knot(int res)
     sweep(3.8f, 0.0f);
     tubeTex();
     std::memset(fb_, 0, sizeof fb_);
+    std::memset(tc_, 0, sizeof tc_);
+    std::memset(hexLut_, 0, sizeof hexLut_);   // filled on first use (shade() lives in engine.cpp)
     std::memset(dac_, 0x3F, sizeof dac_);          // the part before ends in white
 }
 
@@ -43,6 +45,9 @@ void Knot::frame(int32_t clock) {
         std::memcpy(dac_, pal_, sizeof dac_);
         dacSet_ = true;
     }
+    // truecolor: the same fades, unrounded
+    tcWhite_ = T < 0.5f ? 1 - (T < 0 ? 0 : T * 2) : 0;
+    tcBright_ = fadeOut && T > 15 ? (T > 16 ? 0 : 16 - T) : 1;
     if (fadeOut) {
         F.fld(T);
         if (F.fcomp(15.0f).ja()) {
@@ -100,6 +105,17 @@ void Knot::frame(int32_t clock) {
 }
 
 void Knot::toArgb(uint32_t* out) const {
+    if (truecolor) {
+        // the fades per channel: towards white, then the brightness
+        uint32_t f[256];
+        for (int v = 0; v < 256; v++)
+            f[v] = (uint32_t)(((float)v * (1 - tcWhite_) + 255 * tcWhite_) * tcBright_ + 0.5f);
+        for (int i = 0; i < w_ * h_; i++) {
+            const uint32_t c = tc_[i];
+            out[i] = 0xFF000000u | f[c >> 16 & 0xFF] << 16 | f[c >> 8 & 0xFF] << 8 | f[c & 0xFF];
+        }
+        return;
+    }
     uint32_t lut[256];
     for (int i = 0; i < 256; i++) {
         auto c = [&](int k) { return (uint32_t)(dac_[3 * i + k] & 0x3F) * 255 / 63; };

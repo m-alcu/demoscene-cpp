@@ -528,6 +528,7 @@ void Knot::render() {
 // 16.16 values packed into two registers, the fraction's carry into the
 // other half's integer byte.
 void Knot::span(int32_t at, int32_t count) {
+    if (truecolor) return spanTc(at, count);
     auto pass = [&](uint32_t u0, uint32_t v0, uint32_t du0, uint32_t dv0, const uint8_t* tex, bool add) {
         uint32_t edx = (u0 << 16) | (u0 >> 16), ebx = (v0 << 16) | (v0 >> 16);
         uint32_t esi = (du0 << 16) | (du0 >> 16), edi = (dv0 << 16) | (dv0 >> 16);
@@ -567,6 +568,80 @@ void Knot::span(int32_t at, int32_t count) {
     };
     pass(a_[0], a_[1], dAdx_[0], dAdx_[1], light_, false);
     pass(a_[2], a_[3], dAdx_[2], dAdx_[3], plasma_, true);
+}
+
+// --- truecolor ---------------------------------------------------------------------------
+
+namespace {
+// A 256x256 tile at (ROW, COL), 16.16, filtered between the four nearest
+// texels (their centres at the half texel, where the intro's nearest texel
+// is centred), wrapping.
+inline void taps(uint32_t row, uint32_t col, uint32_t at[4], float w[4]) {
+    row -= 0x8000, col -= 0x8000;
+    const uint32_t r0 = (row >> 16) & 0xFF, c0 = (col >> 16) & 0xFF;
+    const uint32_t r1 = (r0 + 1) & 0xFF, c1 = (c0 + 1) & 0xFF;
+    const float fr = (float)(row & 0xFFFF) * (1.0f / 65536), fc = (float)(col & 0xFFFF) * (1.0f / 65536);
+    at[0] = r0 << 8 | c0, at[1] = r0 << 8 | c1, at[2] = r1 << 8 | c0, at[3] = r1 << 8 | c1;
+    w[0] = (1 - fr) * (1 - fc), w[1] = (1 - fr) * fc, w[2] = fr * (1 - fc), w[3] = fr * fc;
+}
+
+inline float bilerp(const float* t, uint32_t row, uint32_t col) {
+    uint32_t at[4];
+    float w[4];
+    taps(row, col, at, w);
+    return t[at[0]] * w[0] + t[at[1]] * w[1] + t[at[2]] * w[2] + t[at[3]] * w[3];
+}
+
+// A ramp of the palette as a function of the shade L (0-31): black -> C over
+// 0-18, C -> white over 18-32 (palette8 at whole L), to ARGB.
+inline uint32_t shade(const float* c, float L) {
+    float k, w;
+    if (L < 18) k = L * (1.0f / 18), w = 0;
+    else {
+        const float t = (L - 18) * (1.0f / 14);
+        k = 1 - t, w = 63 * t;
+    }
+    auto ch = [&](int i) {
+        const float v = (c[i] * k + w) * (255.0f / 63) + 0.5f;
+        return v <= 0 ? 0u : v >= 255 ? 255u : (uint32_t)v;
+    };
+    return 0xFF000000u | ch(0) << 16 | ch(1) << 8 | ch(2);
+}
+}  // namespace
+
+// span in 24-bit colour: the light at attributes 0/1 and the ramp's colour
+// at 2/3 (column, row) both filtered; the colours of neighbouring ramps
+// blended (a ramp is linear in its colour, so blending the colours blends
+// the ramps).
+void Knot::spanTc(int32_t at, int32_t count) {
+    uint32_t a0 = (uint32_t)a_[0], a1 = (uint32_t)a_[1], a2 = (uint32_t)a_[2], a3 = (uint32_t)a_[3];
+    const uint32_t d0 = (uint32_t)dAdx_[0], d1 = (uint32_t)dAdx_[1], d2 = (uint32_t)dAdx_[2], d3 = (uint32_t)dAdx_[3];
+    uint32_t* p = tc_ + at;
+    for (int32_t n = count; n > 0; n--) {
+        const float L = bilerp(lightF_, a1, a0);
+        uint32_t t[4];
+        float w[4], c[3] = {0, 0, 0};
+        taps(a3, a2, t, w);
+        for (int k = 0; k < 4; k++) {
+            const float* b = base_[plasma_[t[k]] >> 5];
+            c[0] += b[0] * w[k], c[1] += b[1] * w[k], c[2] += b[2] * w[k];
+        }
+        *p++ = shade(c, L);
+        a0 += d0, a1 += d1, a2 += d2, a3 += d3;
+    }
+}
+
+// The rotozoomer in 24-bit colour: each pixel at (U0, V0) + x (DU, DV) +
+// y (DUY, DVY), the texel V's row and U's column, filtered, in ramp 2.
+void Knot::mapperTc(uint32_t u0, uint32_t v0, int32_t du, int32_t dv, int32_t duy, int32_t dvy) {
+    if (!hexLut_[0])
+        for (int i = 0; i < 32 * 128; i++) hexLut_[i] = shade(base_[2], (float)i * (1.0f / 128));
+    uint32_t* p = tc_;
+    for (int32_t y = 0; y < h_; y++) {
+        uint32_t u = u0 + (uint32_t)y * (uint32_t)duy, v = v0 + (uint32_t)y * (uint32_t)dvy;
+        for (int32_t x = 0; x < w_; x++, u += (uint32_t)du, v += (uint32_t)dv)
+            *p++ = hexLut_[(int32_t)(bilerp(hexF_, v, u) * 128 + 0.5f) & (32 * 128 - 1)];
+    }
 }
 
 // 16601h: a triangle with four attributes. VD: three rows, three columns
@@ -956,7 +1031,8 @@ void Knot::roto(float angle, int32_t zoom, int32_t cx, int32_t cy) {
     const uint32_t ncx = 0u - (uint32_t)cx;
     const uint32_t u0 = ncx * (uint32_t)a - (uint32_t)cy * (uint32_t)c;
     const uint32_t v0 = ncx * (uint32_t)b - (uint32_t)cy * (uint32_t)d;
-    mapper(u0, v0, (int32_t)a, (int32_t)b, (int32_t)c, (int32_t)d);
+    if (truecolor) mapperTc(u0, v0, (int32_t)a, (int32_t)b, (int32_t)c, (int32_t)d);
+    else mapper(u0, v0, (int32_t)a, (int32_t)b, (int32_t)c, (int32_t)d);
 }
 
 }  // namespace knot

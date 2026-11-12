@@ -1,17 +1,20 @@
 // ctslasse-knot - part 5 of Lasse Reinbøng (Cubic Team & $eeN, 1995): the
 // trefoil knot over the rocking hexagons, in C++17 / SDL3.
 //
-// Usage: ctslasse-knot [--hires] [--scale N] [--loop]
+// Usage: ctslasse-knot [--hires] [--8bit] [--scale N] [--loop]
 //            keys: L endless / the part's own timeline looped, R restart,
+//                  C 24-bit colour / the intro's 256 colours,
 //                  T the precalculated textures in the corners,
 //                  Space pause, Esc quit
-//        ctslasse-knot --dump DIR [--hires] [--frames N] [--start SECONDS] [--loop]
+//        ctslasse-knot --dump DIR [--hires] [--8bit] [--frames N] [--start SECONDS] [--loop]
 //            (no window: writes N frames, 70 per second, as DIR/fNNNN.ppm)
 //
 // Endless (the default): the palette comes in from white and the knot flies
 // in as in the intro, then it runs on with no fade. --loop / L: the part as
 // the intro has it (about 10.9 s, faded out at the end), over and over.
 // --hires: drawn at 640x400 instead of the intro's 320x200.
+// Drawn in 24-bit colour (smooth light and ramps, filtered textures);
+// --8bit / C: in the intro's 256 colours, its picture exactly.
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -116,7 +119,7 @@ int main(int argc, char** argv) {
     std::string dumpDir;
     int scale = 3, frames = 70, res = 1;
     double start = 0;
-    bool loop = false;
+    bool loop = false, truecolor = true;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--scale" && i + 1 < argc) scale = std::max(1, std::atoi(argv[++i]));
@@ -125,13 +128,15 @@ int main(int argc, char** argv) {
         else if (a == "--start" && i + 1 < argc) start = std::atof(argv[++i]);
         else if (a == "--loop") loop = true;
         else if (a == "--hires") res = 2;
+        else if (a == "--8bit") truecolor = false;
         else {
-            std::fprintf(stderr, "usage: ctslasse-knot [--hires] [--scale N] [--loop] | --dump DIR [--hires] [--frames N] [--start S] [--loop]\n");
+            std::fprintf(stderr, "usage: ctslasse-knot [--hires] [--8bit] [--scale N] [--loop] | --dump DIR [--hires] [--8bit] [--frames N] [--start S] [--loop]\n");
             return 1;
         }
     }
     auto k = std::make_unique<knot::Knot>(res);
     k->fadeOut = loop;
+    k->truecolor = truecolor;
     if (!dumpDir.empty()) return dump(*k, dumpDir, frames, start, loop);
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -141,7 +146,9 @@ int main(int argc, char** argv) {
     // 320x200 (or 640x400) shown at 4:3, as on a VGA monitor in mode 13h
     SDL_Window* win = SDL_CreateWindow("ctslasse-knot", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
     auto setTitle = [&] {
-        SDL_SetWindowTitle(win, loop ? "ctslasse-knot - the part, looped" : "ctslasse-knot - endless");
+        std::string t = loop ? "ctslasse-knot - the part, looped" : "ctslasse-knot - endless";
+        t += k->truecolor ? " - 24-bit" : " - 256 colours";
+        SDL_SetWindowTitle(win, t.c_str());
     };
     setTitle();
     SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
@@ -168,6 +175,10 @@ int main(int argc, char** argv) {
             case SDL_SCANCODE_SPACE: paused = !paused; break;
             case SDL_SCANCODE_R: t = 0; break;
             case SDL_SCANCODE_T: showTex = !showTex; break;
+            case SDL_SCANCODE_C:
+                k->truecolor = !k->truecolor;
+                setTitle();
+                break;
             case SDL_SCANCODE_L:
                 loop = !loop;
                 k->fadeOut = loop;

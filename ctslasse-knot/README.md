@@ -18,7 +18,7 @@ the original's**, the picture and the DAC (see Verification).
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
-./build/ctslasse-knot                     # [--hires] [--scale N] [--loop]
+./build/ctslasse-knot                     # [--hires] [--8bit] [--scale N] [--loop]
 ctest --test-dir build
 ```
 
@@ -31,10 +31,11 @@ over and over.
 |---|---|
 | **L** | endless / the part's timeline, looped |
 | **R** | restart |
+| **C** | 24-bit colour / the intro's 256 colours |
 | **T** | show the precalculated textures in the corners: the lighting table (grey), the knot's texture (each ramp's colour), the hexagons, the palette |
 | **Space** / **Esc** | pause / quit |
 
-Headless: `ctslasse-knot --dump DIR [--hires] [--frames N] [--start SECONDS] [--loop]`
+Headless: `ctslasse-knot --dump DIR [--hires] [--8bit] [--frames N] [--start SECONDS] [--loop]`
 writes N frames at 70 per second as `DIR/fNNNN.ppm`.
 
 `--hires` draws at 640x400 instead of 320x200. The projection, the
@@ -43,7 +44,35 @@ rotozoomer's 8x8 block grid, its zoom and centre, and the filler's
 same 256x256 tiles, so the edges get sharper but the texels don't. Only
 the 320x200 output is checked against the original.
 
-A frame takes about 1 ms.
+It draws in **24-bit colour** by default (see below). `--8bit` (or **C**)
+draws in the intro's 256 colours, which is the picture the tests check.
+
+A frame takes about 2 ms in 256 colours and 3.5 ms in 24-bit at 320x200,
+and 5.5 ms and 12 ms at 640x400.
+
+### 24-bit colour
+
+In 256 colours a pixel is a palette index. On the knot it is
+`light + material`: the material picks one of the 8 ramps (×32) and the
+light picks the shade (0-31). The background is shades of ramp 2. That
+gives at most 256 colours, with visible banding in the light and blocky
+texels. The 24-bit mode draws the same scene with the same geometry,
+attributes and timing, but computes the colours differently:
+
+- **Light**: the lighting table is kept as floats, from the value before
+  it is rounded to 5 bits (18FF9h), and filtered bilinearly.
+- **Ramps**: each ramp is evaluated as a continuous function of the shade
+  (black → its colour over 0-18, → white over 18-32). At whole shades it
+  gives the palette's entries before their 6-bit rounding.
+- **Material**: the ramp colours of the four nearest texels are blended
+  bilinearly. A ramp is linear in its colour, so this blends the ramps.
+- **Background**: the hexagons are blurred without truncation, filtered
+  bilinearly, and drawn per pixel instead of the 8x8-block mapper.
+- **Fades**: they are done per pixel, from the unrounded part time,
+  instead of on the 6-bit DAC.
+
+The result is not the original's picture. In this mode `screen()` is not
+drawn, and `toArgb()` returns the 24-bit picture.
 
 ## How it works
 
