@@ -30,6 +30,7 @@ Colección de portes en C++17/SDL3 de clásicos de la escena demo: intros, demos
 Partes del 64K sacadas del puerto [ctslasse](ctslasse/), verificadas frame a frame contra el original (`rea/ctslasse-analisis`).
 
 - [**ctslasse-knot**](ctslasse-knot/) - Parte 5: nudo de trébol hecho de un tubo retorcido, con mapa de entorno y textura de ruido fractal sumados, sobre un rotozoom oscilante de hexágonos difuminados; 762 frames idénticos (imagen y DAC). Modo continuo o la parte en bucle
+- [**ctslasse-textures**](ctslasse-textures/) - Banco de pruebas de las texturas procedurales de la parte 5: ruido fractal diamond-square, mármol por *domain warping*, hexágonos, luz y paleta de 8 rampas, con todos sus parámetros en deslizadores (ImGui), vista en mosaico y animación de la fase; con los valores por defecto reproduce byte a byte las texturas del intro
 
 ### Wish (Majic 12, In Bloom '93)
 
