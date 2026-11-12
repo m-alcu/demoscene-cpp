@@ -126,13 +126,82 @@ texel a pixel gets.
   - **The material**: a fractal noise of 8 levels (diamond-square, 16DCAh),
     displaced by two sine-warped tables made from two more noises (16E81h).
     Its values are ×32, at the tube's texture coordinates: once around,
-    seven times along.
+    seven times along (see below).
 
   So the material picks one of the **8 colour ramps** of the palette, and
   the light picks the shade within it. Each ramp runs black → a colour (18
   steps) → white (14 steps), and the colours are greys, browns and greens
   (189ECh). The filler (16601h) steps the edges and four attributes in
   16.16, with the gradients from the triangle's plane.
+
+### The knot's texture
+
+The material looks random, but it is pseudo-random from fixed seeds, so it
+comes out the same on every run (the tests check its CRC against the
+intro's). `precalc()` builds it in three steps.
+
+**1. Three fractal noises** (16DCAh):
+
+```cpp
+plasma(0x17091977, t0, 0x1F4, 3);   // the base: 3 bits, values 0-7
+plasma(0x4D3,      t1, 0x1F4, 8);   // a helper noise: 8 bits, 0-255
+plasma(0x477,      t2, 0x1F4, 8);   // another one
+```
+
+Each is a **diamond-square** over a 256x256 tile that wraps both ways:
+
+- **Generator**: a linear congruential one, `seed = seed * 0x15A4E35 + 1`,
+  taking the signed high half (−32768..32767).
+- **Start**: `t[0]` gets a random value.
+- **Eight levels**: the step starts at 256 and halves down to 1. A step of
+  256 is kept as `dh = 0`, as the 8-bit register wraps. At each level:
+  - the **centre** of each square is the average of its 4 corners plus a
+    random value × 3;
+  - the **midpoint of each side** is the average of its 4 neighbours plus
+    a random value × 2.
+- **Amplitude**: the random part is scaled by `amp` (1F4h = 500) and
+  shifted right by 17, and the amplitude **halves at each level**. At the
+  first level a centre moves by about ±94, so the large scales vary a lot
+  and the small ones come out smooth.
+- **Clamping**: each value is clamped to `[0, 2^bits − 1]`.
+
+`t0` has only 3 bits (0-7), so at the first levels the random part is far
+larger than the range and saturates. That gives blobs of 8 levels with
+ragged edges.
+
+**2. Two displacement tables** (18B76h), for `i` from 0 to 255, from the
+first row of `t1` and `t2`:
+
+```
+tx[i] = round(t2[i]/2 − 80·sin(0.04·i))
+ty[i] = round(t1[i]/2 + 80·cos(0.04·i))
+```
+
+Each is a wave of amplitude 80 with noise on top, computed on the emulated
+x87 so the rounding matches the original.
+
+**3. The base warped** (16E81h):
+
+```cpp
+dx = tx[t1[k]], dy = ty[t2[k]];
+plasma_[k] = t0[(row + dy, column + dx)] << 5;
+```
+
+Each pixel of `t0` is read displaced. The displacement does not depend on
+the pixel's position but on the **values of the noises `t1` and `t2` at
+that pixel**, passed through the wave tables. This is what is now called
+*domain warping*: the blobs of `t0` get stretched and twisted into a
+marbled, camouflage-like pattern.
+
+Finally `<< 5` multiplies by 32, so 0-7 become 0, 32, …, 224: the starts of
+the **8 ramps** of the palette. The texture does not hold a colour but
+**which ramp** each point uses. The light table gives the shade within the
+ramp when the knot is drawn (`index = light + material`). In 24-bit mode
+the ramp colours of the 4 nearest texels are blended.
+
+Any other seed gives a different marble in the same style, but then the
+8-bit picture no longer matches the original's. `0x17091977` reads like a
+date (17-09-1977), probably the author's own touch.
 
 ### Floating point
 
