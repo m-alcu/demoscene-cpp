@@ -65,20 +65,9 @@ void Pond::precalc() {
     plasma(0x12345678, t0, 0x2710, 8);
     plasma(0x4D3, t1, 0x64, 8);
     plasma(0x477, t2, 0x190, 8);
-    for (int32_t i = 0; i < 0x100; i++) {   // 18EAFh
-        F.fld((X)i);
-        const double di = F.fstd();
-        F.fmul(0.05);
-        F.fsin();
-        F.fmul(-70.0);
-        F.fld(di), F.fmul(0.05);
-        F.fxch();
-        F.frndint();
-        tx[i] = (uint8_t)F.fistp();
-        F.fcos();
-        F.fmul(70.0);
-        F.frndint();
-        ty[i] = (uint8_t)F.fistp();
+    for (int32_t i = 0; i < 0x100; i++) {   // 18EAFh: the displacement tables, +-70 texels
+        tx[i] = (uint8_t)x87::fist(x87::fsin(X(i) * 0.05) * -70.0);
+        ty[i] = (uint8_t)x87::fist(x87::fcos(X(i) * 0.05) * 70.0);
     }
     displace(t2, t0, t1, tex_.data(), tx, ty);
 }
@@ -88,23 +77,15 @@ void Pond::precalc() {
 // greyed. Then 65 more (+4100h) for the highlights: J + row (255 - J) / 64,
 // towards white.
 void Pond::lightTables() {
-    int32_t lvl = 0x40, acc = 0;
-    for (int32_t row = 0; row <= 0x40; row++, lvl--, acc += 0xFF) {
-        const int32_t step = -row;
-        F.fld((X)lvl), F.fmul(0.07692307692307693), F.fsubr(1.5);   // 1/13
-        F.fldl2e(), F.fmulp();
-        F.exp2();
-        F.fadd(-0.02);
-        F.fld1();
-        F.fxch();
-        float f = F.fstpf();
-        if (F.fcomp(f).jb()) f = 1.0f;
-        int32_t s = acc;
-        for (int32_t j = 0; j < 0x100; j++, s += step) {
-            F.fld(f), F.fld((X)j), F.fmulst(1), F.fld1(), F.fsubrp(2), F.fxch(), F.fmul(128.0f), F.faddp();
-            F.frndint();
-            light_[row * 0x100 + j] = (uint8_t)F.fistp();
-            light_[0x4100 + row * 0x100 + j] = (uint8_t)(s / 64 + j);
+    for (int32_t row = 0; row <= 0x40; row++) {
+        const int32_t lvl = 0x40 - row;
+        // (the intro computes e^ as Watcom does, through FPREM, F2XM1 and
+        // FSCALE; std::exp gives the same float)
+        float f = (float)(std::exp(1.5 - X(lvl) * 0.07692307692307693) + -0.02);   // 1/13
+        if (1 < f) f = 1.0f;
+        for (int32_t j = 0; j < 0x100; j++) {
+            light_[row * 0x100 + j] = (uint8_t)x87::fist(X(j) * f + (1 - X(f)) * 128.0f);
+            light_[0x4100 + row * 0x100 + j] = (uint8_t)((0xFF - j) * row / 64 + j);
         }
     }
 }
@@ -186,59 +167,34 @@ void Pond::copyDac(int pal) {
 // --- the intro's frame ------------------------------------------------------------------------
 
 void Pond::frame(int32_t clock) {
-    auto cmpF = [&](float v, float c) { F.fld(v); return F.fcomp(c); };
-    F.fld((X)clock);
-    F.fdiv(kUnit);
-    const float T = F.fstf();
-    const double dT = F.fstd();
+    const X t = X(clock) / kUnit;
+    const float T = (float)t;
+    const double dT = (double)t;
     // the palettes: in from white over T 0-0.5 (black-white), to black-blue-
     // white over 0.5-1.5, to pal1 over 8-12, out over 68-72
-    if (F.fcomp(0.5).jb()) {
-        F.fld(T), F.fmul(2.0f), F.fmul(64.0f);
-        F.frndint();
-        setDac(3, F.fistp(), 0, 0);
-    } else if (F.fld(dT), F.fcomp(1.5).jb()) {
-        F.fld(dT), F.fadd(-0.5), F.fmul(64.0);
-        F.frndint();
-        setDac(2, F.fistp(), 3, 1);
-    }
-    else if (!dacSet_) {
+    if (t < 0.5) {
+        setDac(3, x87::fist(X(T) * 2.0f * 64.0f), 0, 0);
+    } else if (dT < 1.5) {
+        setDac(2, x87::fist((X(dT) - 0.5) * 64.0), 3, 1);
+    } else if (!dacSet_) {
         // started past the fade-in (never in the intro): the palette in full
         copyDac(2);
     }
     dacSet_ = true;
-    if (cmpF(T, 8.0f).ja() && cmpF(T, 12.0f).jb()) {
-        F.fld(T), F.fadd(-8.0f), F.fmul(16.0f);
-        F.frndint();
-        setDac(1, F.fistp(), 2, 1);
-    }
-    if (cmpF(T, 68.0f).ja()) {
-        F.fld(72.0f), F.fsub(T), F.fmul(16.0f);
-        F.frndint();
-        setDac(1, F.fistp(), 0, 2);
-    }
+    if (T > 8 && T < 12) setDac(1, x87::fist((X(T) - 8.0f) * 16.0f), 2, 1);
+    if (T > 68) setDac(1, x87::fist((72.0f - X(T)) * 16.0f), 0, 2);
     // the drops until T 12, the plane from T 8 (the tunnel from T 33 is not here)
-    if (cmpF(T, 12.0f).jb()) bubbles(T);
-    if (cmpF(T, 8.0f).ja() && cmpF(T, 38.0f).jb()) wobble(T);
-    // grid = grid a + plane b, b rising over T 8-12
+    if (T < 12) bubbles(T);
+    if (T > 8 && T < 38) wobble(T);
+    // grid = grid a + plane b, b rising over T 8-12 as (1 - cos) / 2
     float w = 0;
-    if (cmpF(T, 8.0f).ja()) {
-        F.fld(T), F.fadd(-8.0f), F.fmul(0.25f), F.fmul(3.141592653589793), F.fcos();
-        F.fld1(), F.fsubrp(1), F.fmul(0.5);
-        w = F.fstpf();
-    }
-    if (cmpF(T, 12.0f).ja()) w = 1.0f;
-    if (F.fldz(), F.fcomp(w).ja()) w = 0;
-    if (F.fld1(), F.fcomp(w).jb()) w = 1.0f;
-    F.fld(4096.0f);
-    F.fld(w), F.fmulst(1);
-    w = F.fstf();
-    F.frndint();
-    F.fxch(), F.fsub(w);
-    F.fxch();
-    const int32_t wb = F.fistp();
-    F.frndint();
-    const int32_t wa = F.fistp();
+    if (T > 8) w = (float)((1 - x87::fcos((X(T) - 8.0f) * 0.25f * 3.141592653589793)) * 0.5);
+    if (T > 12) w = 1.0f;
+    if (0 > w) w = 0;
+    if (1 < w) w = 1.0f;
+    const X wx = X(w) * 4096.0f;
+    const int32_t wb = x87::fist(wx);
+    const int32_t wa = x87::fist(4096.0f - X((float)wx));
     blend(wa, wb);
     gridMap();
 }

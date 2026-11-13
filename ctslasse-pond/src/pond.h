@@ -101,7 +101,6 @@ private:
     void setDac(int src, int32_t k0, int mix, int mode);   // palettes by number: 1-3
     void copyDac(int src);
 
-    Fpu F;
     Grid grid_{}, plane_{};                 // the drops' grid (shown), the plane's
     // the texture and the light tables (64K each: the mapper's levels wrap
     // at 256), the screen

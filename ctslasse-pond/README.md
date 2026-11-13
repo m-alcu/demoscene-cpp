@@ -79,10 +79,6 @@ byte of another (the integer), joined by ADD/ADC, and reads its variables
 as dwords straddling two of them. The port writes this as plain 24-bit
 arithmetic, which gives the same pixels.
 
-The drops and the plane (`src/grid.cpp`) keep the x87's arithmetic: each
-expression in long double, in the intro's order, rounded to float or
-double wherever the intro stores a value.
-
 A pixel is `light_table[level][texel]`. There are 65 levels, and level L
 maps texel J to `J·f + 128(1 − f)`, where `f = e^(L/13 − 1.5) − 0.02`.
 After those come 65 more levels for the highlights, which run towards
@@ -146,9 +142,16 @@ do not appear.
 
 ### Floating point
 
-As in the port: the x87 at 80 bits, with the transcendentals computed as
-the harness's CPU (QEMU) computes them (`src/x87.h`). Build with
-`-ffp-contract=off`, as CMakeLists does.
+The intro's arithmetic is the x87's: 80 bits, rounding to nearest. The
+code writes it as expressions in `long double`, which is that format with
+GCC or Clang on x86. Each expression is evaluated in the intro's order and
+rounded to float or double wherever the intro stores a value. Elsewhere
+(MSVC, ARM) `long double` is another format and the build stops with a
+`static_assert`.
+
+`src/x87.h` holds what the harness's CPU (QEMU) does its own way: FSIN and
+FCOS through doubles, and FISTP saturating. The rest is `<cmath>`. Build
+with `-ffp-contract=off`, as CMakeLists does.
 
 ## Verification
 

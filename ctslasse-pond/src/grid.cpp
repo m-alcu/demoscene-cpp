@@ -12,10 +12,10 @@ namespace pond {
 
 namespace {
 
-X fsin(X a) { return x87::fsin(a); }
-X fcos(X a) { return x87::fcos(a); }
-X fsqrt(X a) { return x87::fsqrt(a); }
-uint32_t fist(X a) { return (uint32_t)x87::fist32(a); }
+using x87::fcos;
+using x87::fsin;
+X fsqrt(X a) { return std::sqrt(a); }
+uint32_t fist(X a) { return (uint32_t)x87::fist(a); }
 
 // 1C746h: max(cos A, 0), as a float
 float cosPos(float a) {
