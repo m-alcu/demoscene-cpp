@@ -5,7 +5,8 @@
 // part 8 with its texture replaced by the marble the intro makes before
 // embossing the logo; its DAC and grid are the original's.
 // The 32-bit picture has no reference: every 10th frame, it is checked to
-// stay close to the 256-colour one (the mean difference per channel).
+// stay close to the 256-colour one (the mean difference per channel). The
+// 512x512 marble is checked to hold the 256 one at its even texels.
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -92,6 +93,15 @@ int main(int argc, char** argv) {
         }
     }
     std::fclose(f);
+    {
+        pond::Pond q;
+        q.setMarble(512);
+        int differ = 0;
+        for (int y = 0; y < 256; y++)
+            for (int x = 0; x < 256; x++) differ += q.texture512()[(2 * y) << 9 | 2 * x] != q.texture()[y << 8 | x];
+        std::printf("512 marble: %d of its even texels differ from the 256 one\n", differ);
+        failures += differ != 0;
+    }
     std::printf("%d frames, %d differ\n", frames, bad);
     std::printf("32-bit colour: at most %.2f from the 256 colours per channel, on average; %d frames too far\n", worst,
                 far);

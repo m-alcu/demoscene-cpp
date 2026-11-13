@@ -1,5 +1,5 @@
 // The pond of Lasse Reinbøng (Cubic Team & $eeN, 1995): the start of part 8
-// of the intro (1C776h), without its logo: a marble texture seen through
+// of the intro, without its logo: a marble texture seen through
 // water: drops fall in it and their rings run out,
 // pushing the picture outwards and catching the light.
 //
@@ -7,8 +7,8 @@
 // drawn by the intro's grid mapper in 8x8 blocks over 320x200. Two ways to
 // move the grid:
 //
-//   frame(clock)  the intro, exactly: its three drops (1CB2Bh), and from
-//                 T 8 its wobbling plane blending in (1CDF8h), with its
+//   frame(clock)  the intro, exactly: its three drops, and from
+//                 T 8 its wobbling plane blending in, with its
 //                 palettes. Translated from the ctslasse port routine by
 //                 routine, x87 order kept; matches the original
 //                 (tests/ref.txt).
@@ -55,8 +55,10 @@ public:
 
     // The endless pond at T: DROPS are the drops fallen so far (finished ones
     // may be removed). The palette comes in from white over T 0-1.5 and stays
-    // blue.
-    void pondFrame(float t, const std::vector<Drop>& drops);
+    // blue. CELL: the spacing, in 320x200 pixels, at which the water is
+    // computed for the 32-bit picture: 8 is the intro's grid, smaller gives
+    // sharper rings (the 256-colour picture always uses the grid).
+    void pondFrame(float t, const std::vector<Drop>& drops, int cell = 8);
     // The intro's three drops
     static std::vector<Drop> introDrops();
     // A drop is done when its ring has left the screen
@@ -64,17 +66,23 @@ public:
 
     const uint8_t* screen() const { return screen_.data(); }   // 320x200
     const uint8_t* dac() const { return dac_; }                // 256 RGB, 6-bit
-    const uint8_t* texture() const { return tex_.data(); }     // 256x256, the intro's [2B4C0h] + 130000h
+    const uint8_t* texture() const { return tex_.data(); }     // 256x256, the marble
     const uint8_t* lightTable() const { return light_.data(); } // 130 x 256 (the rest zero)
     // the grid as the intro holds it: 41 x 26 x (u, v, light), 3198 dwords
     const uint8_t* grid() const { return reinterpret_cast<const uint8_t*>(grid_.data()); }
     // the picture in 256 colours, as the intro shows it (the screen through the DAC)
     void toArgb(uint32_t* out) const;
-    // The same frame in 32-bit colour, from the same grid: u, v and the light
-    // interpolated per pixel at full precision, the marble filtered
-    // bilinearly, the light levels and the palettes computed without
-    // rounding. Call after frame() or pondFrame().
-    void toTrueColor(uint32_t* out) const;
+    // The same frame in 32-bit colour, at any size (WxH, shown at 4:3 as
+    // 320x200 is): u, v and the light interpolated per pixel at full
+    // precision from the water (the grid, or pondFrame()'s finer one), the
+    // marble filtered bilinearly, the light levels and the palettes computed
+    // without rounding. Call after frame() or pondFrame().
+    void toTrueColor(uint32_t* out, int w = W, int h = H) const;
+    // The marble the 32-bit picture uses: 256 (the intro's) or 512 (the same
+    // marble with one more octave of detail; made on first use)
+    void setMarble(int size);
+    int marble() const { return marble_; }
+    const uint8_t* texture512() const { return tex512_.data(); }   // 512x512, after setMarble(512)
 
 private:
     // A point of the grid: the texture's u and v (texels) and the light
@@ -86,11 +94,14 @@ private:
     static_assert(sizeof(Point) == 12, "the intro's layout");
     using Grid = std::array<Point, kGridW * kGridH>;
 
-    void precalc();                 // the texture, as 18A6Ch makes [2B4C0h] + 130000h
+    void precalc();                 // the texture, as the intro's precalculation makes it
     void lightTables();             // part 8's set-up
-    void plasma(uint32_t seed, uint8_t* t, uint32_t amp, uint32_t bits);
+    void precalc512();              // the marble at 512x512 (32-bit picture)
+    static void plasmaLevel(uint32_t& seed, uint8_t* t, int size, int32_t half, int32_t amp, int32_t top);
+    static void plasma(uint32_t& seed, uint8_t* t, uint32_t amp, uint32_t bits);
+    static void warpTables(uint8_t* tx, uint8_t* ty);
     static void displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const uint8_t* tx,
-                         const uint8_t* ty);
+                         const uint8_t* ty, int size, int scale);
     static void gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                          int32_t n);
     // the same gradient unrounded (32-bit colour)
@@ -109,9 +120,20 @@ private:
     void copyDac(int src);
 
     Grid grid_{}, plane_{};                 // the drops' grid (shown), the plane's
+    // The water the 32-bit picture is drawn from: u and v (texels) and the
+    // light level at points CELL pixels apart (of 320x200), NX x NY of them.
+    struct Field {
+        int nx = 0, ny = 0, cell = 8;
+        std::vector<double> u, v, l;
+    };
+    Field field_;
+    void fieldFromGrid();                   // the field at the grid's points
+    std::vector<float> litA_, litB_;        // the light at level L: texel J goes to J A + B, per 1/256 level
     // the texture and the light tables (64K each: the mapper's levels wrap
     // at 256), the screen
     std::vector<uint8_t> tex_, light_, screen_;
+    std::vector<uint8_t> tex512_;           // the 512x512 marble, once asked for
+    int marble_ = 256;
     uint8_t pal_[4][768], dac_[768];        // pal_[1-3]: the intro's three palettes (0 unused)
     float palF_[4][768], dacF_[768];        // the same, unrounded (6-bit scale, 0-63)
     bool dacSet_ = false;           // the palette written (else a start past the fades stays white)

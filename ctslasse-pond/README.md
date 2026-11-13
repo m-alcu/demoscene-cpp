@@ -6,8 +6,9 @@ texture is seen through water (the intro's "cubic team & $een" logo, embossed
 in it there, is left out). Drops fall into it, and their rings run outwards, pushing the
 picture aside and catching the light. In the intro this runs from 2:19.6
 (cells 2:20 and 2:25 of `rea/ctslasse-analisis/sheet.png`). The picture is
-320x200, shown at 4:3, in 32-bit colour by default (**C** / `--256` shows
-the intro's 256 colours; see [32-bit colour](#32-bit-colour)).
+320x200, shown at 4:3. By default it is drawn in 32-bit colour at
+1280x800 (`--res WxH` for another size); **C** / `--256` shows the intro's
+256 colours at 320x200. See [32-bit colour](#32-bit-colour).
 
 It is cut out of the [ctslasse](../ctslasse/) port. There are two modes:
 
@@ -26,7 +27,7 @@ It is cut out of the [ctslasse](../ctslasse/) port. There are two modes:
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
-./build/ctslasse-pond                     # [--loop] [--256] [--scale N]
+./build/ctslasse-pond                     # [--loop] [--256] [--res WxH] [--marble 512] [--scale N]
 ctest --test-dir build
 ```
 
@@ -35,14 +36,15 @@ ctest --test-dir build
 | **click** | a drop where clicked (endless) |
 | **D** | a drop somewhere (endless) |
 | **L** | switch between the endless pond and the intro, looped |
-| **C** | switch between 32-bit colour and the intro's 256 colours |
+| **C** | switch between 32-bit colour (hi-res) and the intro's 256 colours |
+| **M** | the marble at 256x256 (the intro's) or 512x512 (32-bit colour) |
 | **R** | restart |
 | **Space** / **Esc** | pause / quit |
 
 Headless:
 
 ```bash
-ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256]
+ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256] [--res WxH] [--marble 512]
 ```
 
 This writes N frames, 70 a second, as `DIR/fNNNN.ppm`. The random drops
@@ -55,21 +57,22 @@ Time is the intro's clock, in its own unit: T = ticks / 813440.24 (about
 
 ### The texture
 
-`precalc()` makes the texture as 18A6Ch does, up to the marble:
+`precalc()` makes the texture as the intro's precalculation does, up to
+the marble:
 
 1. **Three fractals** (diamond-square: seeds 12345678h, 4D3h, 477h).
 2. **The marble**: the first fractal is warped through two sine tables,
    ±70 texels, indexed by the other two.
 
-The intro then embosses its logo into the marble (the 1820 bytes of runs at
-2179Eh, blurred and used to displace it once more); that step is left out.
+The intro then embosses its logo into the marble (1820 bytes of runs,
+blurred and used to displace it once more); that step is left out.
 
 ### The grid and the light
 
 The picture is a grid of 41x26 points, one per 8x8 block. Each point holds
 the texture's u and v and a light level, as 32-bit fixed point.
 
-The **grid mapper** (14DF4h) fills each block by stepping the four corners
+The **grid mapper** fills each block by stepping the four corners
 bilinearly. It works in 8.16 fixed point, in 24 bits, so the texture and
 the light levels wrap at 256. Down the left edge it steps by the corners'
 difference / 8, and across each row by a step that itself changes by
@@ -84,7 +87,7 @@ maps texel J to `J·f + 128(1 − f)`, where `f = e^(L/13 − 1.5) − 0.02`.
 After those come 65 more levels for the highlights, which run towards
 white.
 
-### The drops (1CB2Bh)
+### The drops
 
 Each drop is a ring whose radius grows by 8 cells per T. The three drops
 are centred at (20, 12), (10, 7) and (27, 9), and the second and third
@@ -105,7 +108,7 @@ start at T 1.25 and 2.25. For a point inside the ring:
 |---|---|
 | 0-0.5 | The palette comes in from white, as greys. |
 | 0.5-1.5 | The palette turns black-blue-white. |
-| 8-12 | The palette turns to a red and yellow one. The **wobbling plane** (1CDF8h) blends in: three sines and a twist, plus a ring of light. |
+| 8-12 | The palette turns to a red and yellow one. The **wobbling plane** blends in: three sines and a twist, plus a ring of light. |
 | From 12 | The plane alone. The tunnel comes at T 33; it is not part of this project. |
 
 ### The endless pond
@@ -120,10 +123,13 @@ The light is clamped to the last table level.
 
 The grid holds u, v and the light in 8.24 fixed point, but the grid mapper
 keeps only whole texels and whole light levels, and the DAC has 6 bits per
-channel. `toTrueColor()` draws the same grid without these roundings:
+channel. `toTrueColor()` draws the same water without these roundings, at
+any size:
 
-- In each 8x8 block, u, v and the light are interpolated bilinearly at the
-  mapper's pixel positions, with their fractions kept.
+- Each pixel's centre is placed on the 320x200 screen, and u, v and the
+  light there are interpolated bilinearly between the four water points
+  around it, with their fractions kept. At 320x200 from the grid these
+  are the mapper's own pixel positions.
 - The marble is sampled bilinearly between its four nearest texels. It
   wraps at 256, as the mapper's byte does.
 - The light uses the tables' formula at the fractional level: below 64,
@@ -134,11 +140,32 @@ channel. `toTrueColor()` draws the same grid without these roundings:
   gradients but without the integer division. The fades use the intro's
   own steps (64 per fade).
 
+The water points are the grid's (41x26, 8 pixels apart) in `--loop`: that
+is the intro's water, and a finer one would no longer be its picture. As u
+and v wrap at 256 texels, each point is placed from its neighbour by
+their difference, so that they interpolate without jumps. In the endless
+pond, `pondFrame()` also computes the rings' formula every 2 pixels (of
+320x200: 161x101 points, about 1.5 ms), for sharp ring fronts at high
+resolution; the 256-colour picture keeps the grid.
+
+The light formula is tabled per 1/256 level, and the picture is drawn in
+bands of rows, one per thread: 1280x800 takes about 2 ms.
+
 The picture is the same, without the steps between texels and levels, and
 without the banding of the 6-bit gradients. The palettes are curves, so a
 frame still holds only a few hundred colours, but they change smoothly.
 The few stray green pixels of the 256-colour picture in the endless pond
 do not appear.
+
+The marble is the intro's 256x256 tile by default: at 1280x800 a texel
+covers about 4 pixels, so it is a little soft. With **M** / `--marble 512`
+the 32-bit picture uses the same marble at 512x512. Each of the three
+fractals is made at 256 as the intro does, spread over the even texels of
+a 512 tile, and given one more diamond-square level for the odd ones (half
+the last level's strength, the generator going on where it stopped). The
+warp uses the same sine tables, twice as far. So its even texels are
+exactly the 256 marble (the test checks it), and the rest is one more
+octave of detail. It is made the first time it is asked for (about 3 ms).
 
 ### Floating point
 
@@ -168,8 +195,8 @@ every frame. The copy has two changes:
 
 - a print after each frame;
 - the part's texture replaced by the marble. This is the tile the intro's
-  precalculation holds just before it embosses the logo: T+10000h after its
-  third displacement.
+  precalculation holds just before it embosses the logo, after its third
+  displacement.
 
 Nothing else changes in the copy. Its DAC and grid are the same as those
 of the unmodified port, frame for frame, because they do not depend on the
@@ -184,8 +211,9 @@ The test draws each frame at its clock and compares. Everything matches.
 So the picture is exactly what the intro would draw with the marble in
 place of its logo texture.
 
-The 32-bit picture has no reference. Every tenth frame of the test, it is
-compared with the 256-colour one, and the mean difference per channel
+The 32-bit picture has no reference. The test checks that the 512x512
+marble holds the 256 one at its even texels. Every tenth frame, the
+picture is compared with the 256-colour one, and the mean difference per channel
 must stay under 16 (it reaches about 11, in the plane's red and yellow
 palette, whose sharp steps the filtering softens).
 

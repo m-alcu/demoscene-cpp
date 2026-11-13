@@ -1,7 +1,7 @@
 # ctslasse-pond reference: part 8 of the intro without its logo, logged from the ctslasse port (exact
 # against the original under rea/ctslasse-analisis) with one print added after each frame, and the
 # part's texture replaced by the marble the precalculation makes before embossing the logo in it
-# (18A6Ch's tile at T+10000h after its third displacement). The DAC and the grid do not depend on the
+# (the precalculation's tile after its third displacement). The DAC and the grid do not depend on the
 # texture: they are the original's.
 # tex TEXTURE LIGHT: CRC32 of the marble (64K) and of the light tables (8200h bytes) at the part's start.
 # frame N CLOCK SCREEN DAC GRID: the clock read (PIT ticks since the part began), CRC32 of the 320x200

@@ -15,6 +15,9 @@ pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 
 add_library(core STATIC src/pond.cpp src/grid.cpp)
 target_include_directories(core PUBLIC src)
+# the 32-bit picture is drawn in bands of rows, one per thread
+find_package(Threads REQUIRED)
+target_link_libraries(core PUBLIC Threads::Threads)
 
 add_executable(ctslasse-pond src/main.cpp)
 target_link_libraries(ctslasse-pond PRIVATE core PkgConfig::SDL3)

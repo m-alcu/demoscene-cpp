@@ -1,5 +1,5 @@
-// Part 8's grid routines: the grid mapper (14DF4h), the blend of the two
-// grids (150BEh), the drops (1CB2Bh) and the wobbling plane (1CDF8h).
+// Part 8's grid routines: the grid mapper, the blend of the two grids, the
+// drops and the wobbling plane.
 //
 // They give the intro's results bit for bit (tests/ref.txt). The floating
 // point is the x87's (see X in pond.h): each expression is evaluated in long
@@ -14,7 +14,7 @@ namespace pond {
 
 namespace {
 
-// 1C746h: max(cos A, 0), as a float
+// max(cos A, 0), as a float
 float cosPos(float a) {
     const float c = (float)std::cos(X(a));
     return 0 > c ? 0.0f : c;
@@ -22,7 +22,7 @@ float cosPos(float a) {
 
 }  // namespace
 
-// 14DF4h: the grid over 40x25 blocks of 8x8 pixels. In each block, u, v
+// The grid over 40x25 blocks of 8x8 pixels. In each block, u, v
 // and the light level are interpolated bilinearly from the four corners:
 // down the left edge row by row, then across each row pixel by pixel.
 //
@@ -77,7 +77,7 @@ void Pond::gridMap() {
         }
 }
 
-// 150BEh: the grid = the grid · A + the plane · B (A + B = 4096), in 32 bits
+// The grid = the grid · A + the plane · B (A + B = 4096), in 32 bits
 void Pond::blend(int32_t a, int32_t b) {
     for (size_t i = 0; i < grid_.size(); i++) {
         Point& g = grid_[i];
@@ -88,7 +88,7 @@ void Pond::blend(int32_t a, int32_t b) {
     }
 }
 
-// 1CB2Bh: the intro's three drops, into the grid. Each is a ring whose
+// The intro's three drops, into the grid. Each is a ring whose
 // radius grows by 8 cells per T; the second and third start 10 and 18 cells
 // behind the first. For a point inside a ring, A = its distance from the
 // ring (negative):
@@ -133,7 +133,7 @@ void Pond::bubbles(float t) {
         }
 }
 
-// 1CDF8h: the plane, into the second grid, from T 8 (U = T - 8). Each
+// The plane, into the second grid, from T 8 (U = T - 8). Each
 // point (x, y), from the centre, is turned by PH = U/2 (the intro's x and y
 // terms are offset: x + 16 and x + 24, y + 8 and y + 16), then waved by
 // three sines, each on the coordinate the one before left, with strengths

@@ -2,18 +2,23 @@
 // the start of part 8: drops falling in water over a marble, in
 // C++17 / SDL3.
 //
-// Usage: ctslasse-pond [--loop] [--256] [--scale N]
+// Usage: ctslasse-pond [--loop] [--256] [--res WxH] [--marble 512] [--scale N]
 //            keys / mouse: click a drop where clicked, D a drop somewhere,
 //                  L the endless pond / the intro looped, C 32-bit colour /
-//                  the intro's 256 colours, R restart, Space pause, Esc quit
-//        ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256]
+//                  the intro's 256 colours, M the marble at 256 / 512,
+//                  R restart, Space pause, Esc quit
+//        ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256] [--res WxH]
+//                      [--marble 512]
 //            (no window: writes N frames, 70 per second, as DIR/fNNNN.ppm)
 //
 // Endless (the default): the intro's three drops, then more falling at
 // random, every 1-2.7 s, with the intro's ring for each. --loop / L: the
 // intro's own timeline, exact: the three drops, then from T 8 (5.5 s) the
 // palette turning red and the plane's waves blending in, until T 12 (8.2 s).
-// Shown in 32-bit colour (the default) or as the intro has it, in 256.
+// Shown in 32-bit colour (the default), at 1280x800 or --res, or as the
+// intro has it, in 256 colours at 320x200. Either is shown at 4:3. The
+// 32-bit picture can use the marble at 512x512: the intro's with one more
+// octave of detail.
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -61,27 +66,38 @@ struct Water {
 
 double partT(double seconds) { return seconds * pond::kPit / pond::kUnit; }
 
-void draw(pond::Pond& p, Water& w, double seconds, bool loop) {
+// What is shown: 32-bit colour at RES, or the intro's 256 colours at 320x200
+struct View {
+    bool trueColor = true;
+    int resW = 1280, resH = 800;
+    int w() const { return trueColor ? resW : pond::W; }
+    int h() const { return trueColor ? resH : pond::H; }
+    // the endless pond's water for the 32-bit picture: every 2 pixels (of 320x200)
+    int cell() const { return trueColor ? 2 : 8; }
+};
+
+void draw(pond::Pond& p, Water& w, double seconds, bool loop, const View& v) {
     if (loop) {
         const double len = pond::kIntroEnd * pond::kUnit / pond::kPit;   // about 8.2 s
         p.frame((int32_t)std::floor(std::fmod(seconds, len) * pond::kPit));
     } else {
         const float t = (float)partT(seconds);
         w.update(t);
-        p.pondFrame(t, w.drops);
+        p.pondFrame(t, w.drops, v.cell());
     }
 }
 
-void picture(const pond::Pond& p, bool trueColor, uint32_t* argb) {
-    if (trueColor) p.toTrueColor(argb);
-    else p.toArgb(argb);
+void picture(const pond::Pond& p, const View& v, std::vector<uint32_t>& argb) {
+    argb.resize((size_t)v.w() * v.h());
+    if (v.trueColor) p.toTrueColor(argb.data(), v.w(), v.h());
+    else p.toArgb(argb.data());
 }
 
-int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double start, bool loop, bool trueColor) {
-    std::vector<uint32_t> argb(pond::W * pond::H);
+int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double start, bool loop, const View& v) {
+    std::vector<uint32_t> argb;
     for (int f = 0; f < frames; f++) {
-        draw(p, w, start + f / 70.0, loop);
-        picture(p, trueColor, argb.data());
+        draw(p, w, start + f / 70.0, loop, v);
+        picture(p, v, argb);
         char path[1024];
         std::snprintf(path, sizeof path, "%s/f%04d.ppm", dir.c_str(), f);
         FILE* g = std::fopen(path, "wb");
@@ -89,7 +105,7 @@ int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double sta
             std::perror(path);
             return 1;
         }
-        std::fprintf(g, "P6\n%d %d\n255\n", pond::W, pond::H);
+        std::fprintf(g, "P6\n%d %d\n255\n", v.w(), v.h());
         for (uint32_t c : argb) {
             const uint8_t rgb[3] = {(uint8_t)(c >> 16), (uint8_t)(c >> 8), (uint8_t)c};
             std::fwrite(rgb, 1, 3, g);
@@ -105,7 +121,9 @@ int main(int argc, char** argv) {
     std::string dumpDir;
     int scale = 3, frames = 70;
     double start = 0;
-    bool loop = false, trueColor = true;
+    bool loop = false;
+    int marble = 256;
+    View view;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--scale" && i + 1 < argc) scale = std::max(1, std::atoi(argv[++i]));
@@ -113,18 +131,26 @@ int main(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (a == "--start" && i + 1 < argc) start = std::max(0.0, std::atof(argv[++i]));
         else if (a == "--loop") loop = true;
-        else if (a == "--256") trueColor = false;
+        else if (a == "--256") view.trueColor = false;
+        else if (a == "--res" && i + 1 < argc && std::sscanf(argv[i + 1], "%dx%d", &view.resW, &view.resH) == 2 &&
+                 view.resW > 0 && view.resH > 0 && view.resW <= 7680 && view.resH <= 4800)
+            i++;
+        else if (a == "--marble" && i + 1 < argc && (std::atoi(argv[i + 1]) == 256 || std::atoi(argv[i + 1]) == 512))
+            marble = std::atoi(argv[++i]);
         else {
-            std::fprintf(stderr, "usage: ctslasse-pond [--loop] [--256] [--scale N] | --dump DIR [--frames N] [--start S] [--loop] [--256]\n");
+            std::fprintf(stderr,
+                         "usage: ctslasse-pond [--loop] [--256] [--res WxH] [--marble 256|512] [--scale N] | "
+                         "--dump DIR [--frames N] [--start S] [--loop] [--256] [--res WxH] [--marble 256|512]\n");
             return 1;
         }
     }
     auto p = std::make_unique<pond::Pond>();
+    p->setMarble(marble);
     Water water;
     if (!dumpDir.empty()) {
         // the random drops up to START, as a window would have had them
         if (!loop) water.update((float)partT(start));
-        return dump(*p, water, dumpDir, frames, start, loop, trueColor);
+        return dump(*p, water, dumpDir, frames, start, loop, view);
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -135,17 +161,27 @@ int main(int argc, char** argv) {
     SDL_Window* win = SDL_CreateWindow("ctslasse-pond", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
     auto setTitle = [&] {
         std::string title = loop ? "ctslasse-pond - the intro, looped" : "ctslasse-pond - endless (click: a drop)";
-        title += trueColor ? " - 32-bit" : " - 256 colours";
+        title += view.trueColor ? " - 32-bit, " + std::to_string(view.resW) + "x" + std::to_string(view.resH) +
+                                      ", marble " + std::to_string(p->marble())
+                                : std::string(" - 256 colours");
         SDL_SetWindowTitle(win, title.c_str());
     };
     setTitle();
     SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
-    SDL_SetRenderLogicalPresentation(ren, 320, 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
     SDL_SetRenderVSync(ren, 1);
-    SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, pond::W, pond::H);
-    SDL_SetTextureScaleMode(tex, SDL_SCALEMODE_NEAREST);
+    // the picture's texture, and the view at 4:3 (W x H shown as W x 1.2 H)
+    SDL_Texture* tex = nullptr;
+    auto setView = [&] {
+        if (tex) SDL_DestroyTexture(tex);
+        tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, view.w(), view.h());
+        // the 256 colours as square-cornered pixels, the 32-bit picture smooth
+        SDL_SetTextureScaleMode(tex, view.trueColor ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        SDL_SetRenderLogicalPresentation(ren, view.w(), (int)std::lround(view.h() * 1.2),
+                                         SDL_LOGICAL_PRESENTATION_LETTERBOX);
+    };
+    setView();
 
-    std::vector<uint32_t> argb(pond::W * pond::H);
+    std::vector<uint32_t> argb;
     const Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 last = SDL_GetPerformanceCounter();
     double t = 0;
@@ -159,10 +195,11 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) running = false;
             if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT && !loop) {
-                // the window's point on the 320x240 view, then the grid's cells (8 pixels, rows 5/6)
+                // the window's point on the view, then the grid's cells (40 across, 25 down)
                 float x = e.button.x, y = e.button.y;
                 SDL_RenderCoordinatesFromWindow(ren, x, y, &x, &y);
-                if (x >= 0 && x < 320 && y >= 0 && y < 240) water.drop(x / 8, y * (200.0f / 240) / 8, (float)partT(t));
+                const float vw = (float)view.w(), vh = std::round(view.h() * 1.2f);
+                if (x >= 0 && x < vw && y >= 0 && y < vh) water.drop(x * 40 / vw, y * 25 / vh, (float)partT(t));
             }
             if (e.type != SDL_EVENT_KEY_DOWN || e.key.repeat) continue;
             switch (e.key.scancode) {
@@ -173,7 +210,12 @@ int main(int argc, char** argv) {
                 if (!loop) water.randomDrop((float)partT(t));
                 break;
             case SDL_SCANCODE_C:
-                trueColor = !trueColor;
+                view.trueColor = !view.trueColor;
+                setView();
+                setTitle();
+                break;
+            case SDL_SCANCODE_M:
+                p->setMarble(p->marble() == 512 ? 256 : 512);
                 setTitle();
                 break;
             case SDL_SCANCODE_L:
@@ -194,9 +236,9 @@ int main(int argc, char** argv) {
             water.next -= back;
             t = 60;
         }
-        draw(*p, water, t, loop);
-        picture(*p, trueColor, argb.data());
-        SDL_UpdateTexture(tex, nullptr, argb.data(), pond::W * 4);
+        draw(*p, water, t, loop, view);
+        picture(*p, view, argb);
+        SDL_UpdateTexture(tex, nullptr, argb.data(), view.w() * 4);
         SDL_RenderClear(ren);
         SDL_RenderTexture(ren, tex, nullptr, nullptr);
         SDL_RenderPresent(ren);
