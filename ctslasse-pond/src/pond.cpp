@@ -18,19 +18,6 @@ inline uint32_t next(uint32_t& seed) {
 
 }  // namespace
 
-uint32_t Pond::r32(uint32_t a) const {
-    uint32_t v;
-    std::memcpy(&v, mem_ + a, 4);
-    return v;
-}
-
-void Pond::w16(uint32_t a, uint32_t v) {
-    const uint16_t h = (uint16_t)v;
-    std::memcpy(mem_ + a, &h, 2);
-}
-
-void Pond::w32(uint32_t a, uint32_t v) { std::memcpy(mem_ + a, &v, 4); }
-
 // --- the texture --------------------------------------------------------------------------
 
 // 16DCAh: a diamond-square fractal over the tile: values 0..2^BITS-1, the
@@ -93,7 +80,7 @@ void Pond::precalc() {
         F.frndint();
         ty[i] = (uint8_t)F.fistp();
     }
-    displace(t2, t0, t1, mem_ + kTex, tx, ty);
+    displace(t2, t0, t1, tex_.data(), tx, ty);
 }
 
 // Part 8's light tables, 65 levels of 256 (1C7C0h): level L maps a texel J
@@ -101,7 +88,6 @@ void Pond::precalc() {
 // greyed. Then 65 more (+4100h) for the highlights: J + row (255 - J) / 64,
 // towards white.
 void Pond::lightTables() {
-    const uint32_t light = kLight;
     int32_t lvl = 0x40, acc = 0;
     for (int32_t row = 0; row <= 0x40; row++, lvl--, acc += 0xFF) {
         const int32_t step = -row;
@@ -117,8 +103,8 @@ void Pond::lightTables() {
         for (int32_t j = 0; j < 0x100; j++, s += step) {
             F.fld(f), F.fld((X)j), F.fmulst(1), F.fld1(), F.fsubrp(2), F.fxch(), F.fmul(128.0f), F.faddp();
             F.frndint();
-            w8(light + row * 0x100 + j, (uint32_t)F.fistp());
-            w8(light + 0x4100 + row * 0x100 + j, (uint32_t)(s / 64 + j));
+            light_[row * 0x100 + j] = (uint8_t)F.fistp();
+            light_[0x4100 + row * 0x100 + j] = (uint8_t)(s / 64 + j);
         }
     }
 }
@@ -161,7 +147,7 @@ void Pond::palettes() {
     both(2, 0x180, 0x10, 0x20, 0x40, 0x3F, 0x3F, 0x3F, 0x80);
 }
 
-Pond::Pond() : memory_(0x40000, 0), mem_(memory_.data()) {
+Pond::Pond() : tex_(0x10000), light_(0x10000), screen_(W * H) {
     precalc();
     lightTables();
     palettes();
@@ -201,8 +187,6 @@ void Pond::copyDac(int pal) {
 
 void Pond::frame(int32_t clock) {
     auto cmpF = [&](float v, float c) { F.fld(v); return F.fcomp(c); };
-    const uint32_t grid = kGrid, grid2 = kGrid + 0x31F8;
-    (void)grid2;
     F.fld((X)clock);
     F.fdiv(kUnit);
     const float T = F.fstf();
@@ -234,9 +218,9 @@ void Pond::frame(int32_t clock) {
         setDac(1, F.fistp(), 0, 2);
     }
     // the drops until T 12, the plane from T 8 (the tunnel from T 33 is not here)
-    if (cmpF(T, 12.0f).jb()) bubbles(grid, T);
-    if (cmpF(T, 8.0f).ja() && cmpF(T, 38.0f).jb()) wobble(grid, T);
-    // grid = grid a + grid2 b, b rising over T 8-12
+    if (cmpF(T, 12.0f).jb()) bubbles(T);
+    if (cmpF(T, 8.0f).ja() && cmpF(T, 38.0f).jb()) wobble(T);
+    // grid = grid a + plane b, b rising over T 8-12
     float w = 0;
     if (cmpF(T, 8.0f).ja()) {
         F.fld(T), F.fadd(-8.0f), F.fmul(0.25f), F.fmul(3.141592653589793), F.fcos();
@@ -255,8 +239,8 @@ void Pond::frame(int32_t clock) {
     const int32_t wb = F.fistp();
     F.frndint();
     const int32_t wa = F.fistp();
-    blend(grid, grid, grid + 0x31F8, wa, wb);
-    gridMap(kScreen, grid, kTex, kLight);
+    blend(wa, wb);
+    gridMap();
 }
 
 // --- the endless pond --------------------------------------------------------------------------
@@ -301,13 +285,12 @@ void Pond::pondFrame(float t, const std::vector<Drop>& drops) {
                 light += std::max(std::cos(a), 0.0) * s * 50;
             }
             light = std::min(light, (double)(0x81 << 12) + 4095);
-            const uint32_t p = kGrid + (uint32_t)(gy * 41 + gx) * 12;
             // as the blend leaves them: times 4096
-            w32(p, (uint32_t)(int32_t)std::lround(u) << 12);
-            w32(p + 4, (uint32_t)(int32_t)std::lround(v) << 12);
-            w32(p + 8, (uint32_t)(int32_t)std::lround(light) << 12);
+            grid_[gy * kGridW + gx] = {(uint32_t)(int32_t)std::lround(u) << 12,
+                                       (uint32_t)(int32_t)std::lround(v) << 12,
+                                       (uint32_t)(int32_t)std::lround(light) << 12};
         }
-    gridMap(kScreen, kGrid, kTex, kLight);
+    gridMap();
 }
 
 void Pond::toArgb(uint32_t* out) const {
@@ -359,15 +342,15 @@ void Pond::toTrueColor(uint32_t* out) const {
     };
     for (int by = 0; by < 25; by++)
         for (int bx = 0; bx < 40; bx++) {
-            const uint32_t p = kGrid + (uint32_t)(by * 41 + bx) * 12;
+            const Point* p = &grid_[by * kGridW + bx];
+            const Point* corner[4] = {p, p + 1, p + kGridW, p + kGridW + 1};
+            auto field = [](const Point* q, int k) { return k == 0 ? q->u : k == 1 ? q->v : q->light; };
             // the corners relative to the top left one (u and v wrap: their differences are what count)
             double c[3][4];
             for (int k = 0; k < 3; k++) {
-                const uint32_t a = r32(p + 4 * k);
+                const uint32_t a = field(p, k);
                 c[k][0] = k == 2 ? (double)a : (double)(int32_t)a;
-                c[k][1] = c[k][0] + (int32_t)(r32(p + 12 + 4 * k) - a);
-                c[k][2] = c[k][0] + (int32_t)(r32(p + 0x1EC + 4 * k) - a);
-                c[k][3] = c[k][0] + (int32_t)(r32(p + 0x1F8 + 4 * k) - a);
+                for (int n = 1; n < 4; n++) c[k][n] = c[k][0] + (int32_t)(field(corner[n], k) - a);
                 for (double& v : c[k]) v *= kTexel;
             }
             for (int j = 0; j < 8; j++) {

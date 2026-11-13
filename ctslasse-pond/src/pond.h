@@ -17,6 +17,7 @@
 //                 the original's picture).
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -25,6 +26,7 @@
 namespace pond {
 
 constexpr int W = 320, H = 200;
+constexpr int kGridW = 41, kGridH = 26;      // the grid's points: one per 8x8 block's corner
 constexpr double kPit = 1193182.0;
 constexpr double kUnit = 813440.2376280001;   // the part's time unit in PIT ticks (about 0.68 s)
 constexpr float kIntroEnd = 12.0f;            // T: the plane alone from here; the drops are gone
@@ -53,11 +55,12 @@ public:
     // A drop is done when its ring has left the screen
     static bool dropDone(const Drop& d, float t);
 
-    const uint8_t* screen() const { return mem_ + kScreen; }  // 320x200
+    const uint8_t* screen() const { return screen_.data(); }   // 320x200
     const uint8_t* dac() const { return dac_; }                // 256 RGB, 6-bit
-    const uint8_t* texture() const { return mem_ + kTex; }      // the intro's [2B4C0h] + 130000h
-    const uint8_t* lightTable() const { return mem_ + kLight; } // 130 x 256
-    const uint8_t* grid() const { return mem_ + kGrid; }        // 41 x 26 x (u, v, light), 3198 dwords
+    const uint8_t* texture() const { return tex_.data(); }     // 256x256, the intro's [2B4C0h] + 130000h
+    const uint8_t* lightTable() const { return light_.data(); } // 130 x 256 (the rest zero)
+    // the grid as the intro holds it: 41 x 26 x (u, v, light), 3198 dwords
+    const uint8_t* grid() const { return reinterpret_cast<const uint8_t*>(grid_.data()); }
     // the picture in 256 colours, as the intro shows it (the screen through the DAC)
     void toArgb(uint32_t* out) const;
     // The same frame in 32-bit colour, from the same grid: u, v and the light
@@ -67,11 +70,14 @@ public:
     void toTrueColor(uint32_t* out) const;
 
 private:
-    // the flat memory: the grid mapper's variables (1E500h-1E57Fh), the two
-    // grids (the drops', +31F8h the plane's), the texture and light tables
-    // (64K-aligned, as the mapper puts their base in a register's high half),
-    // the screen
-    static constexpr uint32_t kGrid = 0x100, kTex = 0x10000, kLight = 0x20000, kScreen = 0x30000;
+    // A point of the grid: the texture's u and v (texels) and the light
+    // level, in 8.24 fixed point. The drops and the plane leave them in
+    // 16.16; the blend multiplies by 4096.
+    struct Point {
+        uint32_t u, v, light;
+    };
+    static_assert(sizeof(Point) == 12, "the intro's layout");
+    using Grid = std::array<Point, kGridW * kGridH>;
 
     void precalc();                 // the texture, as 18A6Ch makes [2B4C0h] + 130000h
     void lightTables();             // part 8's set-up
@@ -85,26 +91,21 @@ private:
                          int32_t n);
     void palettes();
 
-    // grid.cpp: the port's routines
-    void gridMap(uint32_t dst, uint32_t grid, uint32_t tex, uint32_t light);
-    void cosPos(float x);
-    void blend(uint32_t dst, uint32_t a, uint32_t b, int32_t wa, int32_t wb);
-    void bubbles(uint32_t grid, float t);
-    void wobble(uint32_t grid, float t);
+    // grid.cpp: the intro's routines
+    void gridMap();                     // the grid onto the screen
+    void blend(int32_t a, int32_t b);   // the grid = grid · A + plane · B
+    void bubbles(float t);              // the three drops, into the grid
+    void wobble(float t);               // the plane, into the plane's grid
 
     // the DAC
     void setDac(int src, int32_t k0, int mix, int mode);   // palettes by number: 1-3
     void copyDac(int src);
 
-    uint8_t r8(uint32_t a) const { return mem_[a]; }
-    uint32_t r32(uint32_t a) const;
-    void w8(uint32_t a, uint32_t v) { mem_[a] = (uint8_t)v; }
-    void w16(uint32_t a, uint32_t v);
-    void w32(uint32_t a, uint32_t v);
-
     Fpu F;
-    std::vector<uint8_t> memory_;
-    uint8_t* mem_;
+    Grid grid_{}, plane_{};                 // the drops' grid (shown), the plane's
+    // the texture and the light tables (64K each: the mapper's levels wrap
+    // at 256), the screen
+    std::vector<uint8_t> tex_, light_, screen_;
     uint8_t pal_[4][768], dac_[768];        // pal_[1-3]: the intro's three palettes (0 unused)
     float palF_[4][768], dacF_[768];        // the same, unrounded (6-bit scale, 0-63)
     bool dacSet_ = false;           // the palette written (else a start past the fades stays white)

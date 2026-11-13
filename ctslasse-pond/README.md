@@ -70,10 +70,18 @@ The picture is a grid of 41x26 points, one per 8x8 block. Each point holds
 the texture's u and v and a light level, as 32-bit fixed point.
 
 The **grid mapper** (14DF4h) fills each block by stepping the four corners
-bilinearly. It keeps its variables in memory at 1E500h. Some of them are
-read as dwords that straddle two variables, and each texel lands in the
-low byte of a sum. The mapper is translated as it is, over a flat memory
-with those variables at offsets 0-7Fh.
+bilinearly. It works in 8.16 fixed point, in 24 bits, so the texture and
+the light levels wrap at 256. Down the left edge it steps by the corners'
+difference / 8, and across each row by a step that itself changes by
+1/8 of the bottom edge's minus the top edge's each row. The original splits
+each value between the high half of one register (the fraction) and a
+byte of another (the integer), joined by ADD/ADC, and reads its variables
+as dwords straddling two of them. The port writes this as plain 24-bit
+arithmetic, which gives the same pixels.
+
+The drops and the plane (`src/grid.cpp`) keep the x87's arithmetic: each
+expression in long double, in the intro's order, rounded to float or
+double wherever the intro stores a value.
 
 A pixel is `light_table[level][texel]`. There are 65 levels, and level L
 maps texel J to `J·f + 128(1 − f)`, where `f = e^(L/13 − 1.5) − 0.02`.
