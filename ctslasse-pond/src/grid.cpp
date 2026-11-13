@@ -2,24 +2,21 @@
 // grids (150BEh), the drops (1CB2Bh) and the wobbling plane (1CDF8h).
 //
 // They give the intro's results bit for bit (tests/ref.txt). The floating
-// point is the x87's: each expression is evaluated in long double, in the
-// intro's order, and rounded to float or double where the intro stores a
-// value, or to an integer where it does FRNDINT/FISTP. The sines and cosines
-// are the emulator's (x87.h).
+// point is the x87's (see X in pond.h): each expression is evaluated in long
+// double, in the intro's order, and rounded to float or double where the
+// intro stores a value, or to the nearest integer (lrint) where it does
+// FRNDINT/FISTP.
+#include <cmath>
+
 #include "pond.h"
 
 namespace pond {
 
 namespace {
 
-using x87::fcos;
-using x87::fsin;
-X fsqrt(X a) { return std::sqrt(a); }
-uint32_t fist(X a) { return (uint32_t)x87::fist(a); }
-
 // 1C746h: max(cos A, 0), as a float
 float cosPos(float a) {
-    const float c = (float)fcos(a);
+    const float c = (float)std::cos(X(a));
     return 0 > c ? 0.0f : c;
 }
 
@@ -107,13 +104,13 @@ void Pond::bubbles(float t) {
     };
     auto first = [&](int dx, int dy) {
         Ring r;
-        r.a = (float)(fsqrt(X(dx * dx + dy * dy)) - X(radius));
+        r.a = (float)(std::sqrt(X(dx * dx + dy * dy)) - X(radius));
         r.s = (float)(X(8.0f) * (X(2048.0f) / (X(8.0f) - r.a)));
         return 0 < r.a ? Ring{} : r;
     };
     auto later = [&](int dx, int dy, double behind) {
         Ring r;
-        r.a = (float)(fsqrt(X(dx * dx + dy * dy)) - X(radius) + behind);
+        r.a = (float)(std::sqrt(X(dx * dx + dy * dy)) - X(radius) + behind);
         r.s = (float)(X(2730.666666666666) / (X(4.0f) - r.a) * 4.0);
         return 0 < r.a ? Ring{} : r;
     };
@@ -122,16 +119,17 @@ void Pond::bubbles(float t) {
             // from the centres (20, 12), (10, 7), (27, 9)
             const int x1 = gx - 20, y1 = gy - 12, x2 = gx - 10, y2 = gy - 7, x3 = gx - 27, y3 = gy - 9;
             const Ring r1 = first(x1, y1), r2 = later(x2, y2, 10.0), r3 = later(x3, y3, 18.0);
-            const float g1 = (float)(fsin(r1.a) * r1.s);
-            const float g2 = (float)(fsin(r2.a) * r2.s);
-            const X g3 = fsin(r3.a) * r3.s;
+            const float g1 = (float)(std::sin(X(r1.a)) * r1.s);
+            const float g2 = (float)(std::sin(X(r2.a)) * r2.s);
+            const X g3 = std::sin(X(r3.a)) * r3.s;
             const X u = X(x1) * g1 + gx * 0x8000 + X(x2) * g2 + X(x3) * g3;
             const X v = X(y1) * g1 + gy * 0x8000 + X(y2) * g2 + X(y3) * g3;
             // the light, summed through floats
             const float l1 = (float)(X(cosPos(r1.a)) * (float)(X(r1.s) * 50.0f));
             const float l12 = (float)(X(cosPos(r2.a)) * (float)(X(r2.s) * 50.0f) + (X(l1) + 258048.0f));
             const X light = X(cosPos(r3.a)) * (float)(X(r3.s) * 50.0f) + l12;
-            grid_[gy * kGridW + gx] = {fist(u), fist(v), fist(light)};
+            grid_[gy * kGridW + gx] = {(uint32_t)std::lrint(u), (uint32_t)std::lrint(v),
+                                       (uint32_t)std::lrint(light)};
         }
 }
 
@@ -155,25 +153,25 @@ void Pond::wobble(float t) {
     const float radius = (float)(X(u) * 8.0f);
     const float ph = (float)(X(u) * 0.5f);
     const float q = (float)(X(u) * 0.33333334f);
-    const float cph = (float)fcos(ph);
-    const X sph = fsin(ph);
+    const float cph = (float)std::cos(X(ph));
+    const X sph = std::sin(X(ph));
     for (int y = -12; y <= 13; y++)
         for (int x = -20; x <= 20; x++) {
             const int xs = x + 16, ys = y + 8, xc = x + 24, yc = y + 16;
             const X ty = X(ys) * cph + X(xs) * sph;
             const X tx = X(xc) * cph - sph * X(yc);
-            const X wx = (fsin(ty * 0.16666667f + u) * k1 + 1) * (float)tx;
-            const X wy = (fsin(wx * 0.25f + ph) * k2 + 1) * (float)ty;
-            const X wx2 = (fsin(wy * 0.33333334f + q) * k3 + 1) * (float)wx;
+            const X wx = (std::sin(ty * 0.16666667f + u) * k1 + 1) * (float)tx;
+            const X wy = (std::sin(wx * 0.25f + ph) * k2 + 1) * (float)ty;
+            const X wx2 = (std::sin(wy * 0.33333334f + q) * k3 + 1) * (float)wx;
             const float px = (float)wx2, py = (float)wy;
-            int32_t pu = (int32_t)fist(wx2 * 8.0f * 4096.0f);
-            int32_t pv = (int32_t)fist(X(py) * 8.0f * 4096.0f);
+            int32_t pu = (int32_t)std::lrint(wx2 * 8.0f * 4096.0f);
+            int32_t pv = (int32_t)std::lrint(X(py) * 8.0f * 4096.0f);
             // the ring
-            const float z = (float)(fsqrt(X(x * x + y * y)) - X(radius) + 15.0);
+            const float z = (float)(std::sqrt(X(x * x + y * y)) - X(radius) + 15.0);
             if (0 > z && z > -37.69911184307752) {   // -12 pi
-                const X w = fsin(z) * 4096.0;
+                const X w = std::sin(X(z)) * 4096.0;
                 const X ru = px * w + X(pu), rv = w * py + X(pv);
-                pu = (int32_t)fist(ru), pv = (int32_t)fist(rv);
+                pu = (int32_t)std::lrint(ru), pv = (int32_t)std::lrint(rv);
             }
             plane_[(y + 12) * kGridW + x + 20] = {(uint32_t)pu, (uint32_t)pv, 0x3F000};
         }

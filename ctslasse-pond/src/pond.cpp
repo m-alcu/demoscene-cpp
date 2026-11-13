@@ -66,8 +66,8 @@ void Pond::precalc() {
     plasma(0x4D3, t1, 0x64, 8);
     plasma(0x477, t2, 0x190, 8);
     for (int32_t i = 0; i < 0x100; i++) {   // 18EAFh: the displacement tables, +-70 texels
-        tx[i] = (uint8_t)x87::fist(x87::fsin(X(i) * 0.05) * -70.0);
-        ty[i] = (uint8_t)x87::fist(x87::fcos(X(i) * 0.05) * 70.0);
+        tx[i] = (uint8_t)std::lrint(std::sin(X(i) * 0.05) * -70.0);
+        ty[i] = (uint8_t)std::lrint(std::cos(X(i) * 0.05) * 70.0);
     }
     displace(t2, t0, t1, tex_.data(), tx, ty);
 }
@@ -84,7 +84,7 @@ void Pond::lightTables() {
         float f = (float)(std::exp(1.5 - X(lvl) * 0.07692307692307693) + -0.02);   // 1/13
         if (1 < f) f = 1.0f;
         for (int32_t j = 0; j < 0x100; j++) {
-            light_[row * 0x100 + j] = (uint8_t)x87::fist(X(j) * f + (1 - X(f)) * 128.0f);
+            light_[row * 0x100 + j] = (uint8_t)std::lrint(X(j) * f + (1 - X(f)) * 128.0f);
             light_[0x4100 + row * 0x100 + j] = (uint8_t)((0xFF - j) * row / 64 + j);
         }
     }
@@ -173,28 +173,28 @@ void Pond::frame(int32_t clock) {
     // the palettes: in from white over T 0-0.5 (black-white), to black-blue-
     // white over 0.5-1.5, to pal1 over 8-12, out over 68-72
     if (t < 0.5) {
-        setDac(3, x87::fist(X(T) * 2.0f * 64.0f), 0, 0);
+        setDac(3, std::lrint(X(T) * 2.0f * 64.0f), 0, 0);
     } else if (dT < 1.5) {
-        setDac(2, x87::fist((X(dT) - 0.5) * 64.0), 3, 1);
+        setDac(2, std::lrint((X(dT) - 0.5) * 64.0), 3, 1);
     } else if (!dacSet_) {
         // started past the fade-in (never in the intro): the palette in full
         copyDac(2);
     }
     dacSet_ = true;
-    if (T > 8 && T < 12) setDac(1, x87::fist((X(T) - 8.0f) * 16.0f), 2, 1);
-    if (T > 68) setDac(1, x87::fist((72.0f - X(T)) * 16.0f), 0, 2);
+    if (T > 8 && T < 12) setDac(1, std::lrint((X(T) - 8.0f) * 16.0f), 2, 1);
+    if (T > 68) setDac(1, std::lrint((72.0f - X(T)) * 16.0f), 0, 2);
     // the drops until T 12, the plane from T 8 (the tunnel from T 33 is not here)
     if (T < 12) bubbles(T);
     if (T > 8 && T < 38) wobble(T);
     // grid = grid a + plane b, b rising over T 8-12 as (1 - cos) / 2
     float w = 0;
-    if (T > 8) w = (float)((1 - x87::fcos((X(T) - 8.0f) * 0.25f * 3.141592653589793)) * 0.5);
+    if (T > 8) w = (float)((1 - std::cos((X(T) - 8.0f) * 0.25f * 3.141592653589793)) * 0.5);
     if (T > 12) w = 1.0f;
     if (0 > w) w = 0;
     if (1 < w) w = 1.0f;
     const X wx = X(w) * 4096.0f;
-    const int32_t wb = x87::fist(wx);
-    const int32_t wa = x87::fist(4096.0f - X((float)wx));
+    const int32_t wb = (int32_t)std::lrint(wx);
+    const int32_t wa = (int32_t)std::lrint(4096.0f - X((float)wx));
     blend(wa, wb);
     gridMap();
 }

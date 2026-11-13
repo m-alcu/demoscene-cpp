@@ -19,11 +19,18 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
-#include "x87.h"
-
 namespace pond {
+
+// The intro's floating point is the x87's: 80 bits, rounding to nearest.
+// That is long double with GCC or Clang on x86; the code evaluates its
+// expressions in it, in the intro's order, rounded to float or double where
+// the intro stores a value. Elsewhere the picture would not be exact.
+using X = long double;
+static_assert(std::numeric_limits<X>::digits == 64,
+              "long double must be the x87's 80-bit format (GCC or Clang on x86) for the exact picture");
 
 constexpr int W = 320, H = 200;
 constexpr int kGridW = 41, kGridH = 26;      // the grid's points: one per 8x8 block's corner

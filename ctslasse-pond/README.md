@@ -149,9 +149,15 @@ rounded to float or double wherever the intro stores a value. Elsewhere
 (MSVC, ARM) `long double` is another format and the build stops with a
 `static_assert`.
 
-`src/x87.h` holds what the harness's CPU (QEMU) does its own way: FSIN and
-FCOS through doubles, and FISTP saturating. The rest is `<cmath>`. Build
-with `-ffp-contract=off`, as CMakeLists does.
+The x87 instructions become `<cmath>`: FSQRT `std::sqrt`, FSIN and FCOS
+`std::sin` and `std::cos` in long double, FRNDINT + FISTP `std::lrint`.
+The intro's e^x (FLDL2E, FPREM, F2XM1, FSCALE, as Watcom compiles it) is
+`std::exp`. The emulator the reference was logged under (QEMU) computes
+FSIN, FCOS and F2XM1 through doubles instead, so they can differ in the
+last bits. Here those differences never reach the results: the test gets
+the same texture, light tables, screen, DAC and grid on every frame. Build
+with
+`-ffp-contract=off`, as CMakeLists does.
 
 ## Verification
 
