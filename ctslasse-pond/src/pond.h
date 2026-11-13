@@ -55,10 +55,10 @@ public:
 
     // The endless pond at T: DROPS are the drops fallen so far (finished ones
     // may be removed). The palette comes in from white over T 0-1.5 and stays
-    // blue. CELL: the spacing, in 320x200 pixels, at which the water is
-    // computed for the 32-bit picture: 8 is the intro's grid, smaller gives
-    // sharper rings (the 256-colour picture always uses the grid).
-    void pondFrame(float t, const std::vector<Drop>& drops, int cell = 8);
+    // blue. The 32-bit picture is drawn from the water computed at each of
+    // its pixels when WxH is given (sharp ring fronts), else from the grid's
+    // points (the 256-colour picture always uses the grid).
+    void pondFrame(float t, const std::vector<Drop>& drops, int w = 0, int h = 0);
     // The intro's three drops
     static std::vector<Drop> introDrops();
     // A drop is done when its ring has left the screen
@@ -74,12 +74,13 @@ public:
     void toArgb(uint32_t* out) const;
     // The same frame in 32-bit colour, at any size (WxH, shown at 4:3 as
     // 320x200 is): u, v and the light interpolated per pixel at full
-    // precision from the water (the grid, or pondFrame()'s finer one), the
-    // marble filtered bilinearly, the light levels and the palettes computed
+    // precision from the water (the grid, or pondFrame()'s at each pixel), the
+    // marble filtered (Catmull-Rom), the light levels and the palettes computed
     // without rounding. Call after frame() or pondFrame().
     void toTrueColor(uint32_t* out, int w = W, int h = H) const;
     // The marble the 32-bit picture uses: 256 (the intro's) or 512 (the same
-    // marble with one more octave of detail; made on first use)
+    // marble without the steps of the intro's warp, with one more octave of
+    // detail; made on first use)
     void setMarble(int size);
     int marble() const { return marble_; }
     const uint8_t* texture512() const { return tex512_.data(); }   // 512x512, after setMarble(512)
@@ -97,11 +98,6 @@ private:
     void precalc();                 // the texture, as the intro's precalculation makes it
     void lightTables();             // part 8's set-up
     void precalc512();              // the marble at 512x512 (32-bit picture)
-    static void plasmaLevel(uint32_t& seed, uint8_t* t, int size, int32_t half, int32_t amp, int32_t top);
-    static void plasma(uint32_t& seed, uint8_t* t, uint32_t amp, uint32_t bits);
-    static void warpTables(uint8_t* tx, uint8_t* ty);
-    static void displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const uint8_t* tx,
-                         const uint8_t* ty, int size, int scale);
     static void gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                          int32_t n);
     // the same gradient unrounded (32-bit colour)
@@ -121,10 +117,12 @@ private:
 
     Grid grid_{}, plane_{};                 // the drops' grid (shown), the plane's
     // The water the 32-bit picture is drawn from: u and v (texels) and the
-    // light level at points CELL pixels apart (of 320x200), NX x NY of them.
+    // light level at NX x NY points, CX and CY pixels apart (of 320x200), the
+    // first at (OX, OY).
     struct Field {
-        int nx = 0, ny = 0, cell = 8;
-        std::vector<double> u, v, l;
+        int nx = 0, ny = 0;
+        double cx = 8, cy = 8, ox = 0, oy = 0;
+        std::vector<float> u, v, l;
     };
     Field field_;
     void fieldFromGrid();                   // the field at the grid's points

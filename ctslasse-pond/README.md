@@ -27,7 +27,7 @@ It is cut out of the [ctslasse](../ctslasse/) port. There are two modes:
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
-./build/ctslasse-pond                     # [--loop] [--256] [--res WxH] [--marble 512] [--scale N]
+./build/ctslasse-pond                     # [--loop] [--256] [--res WxH] [--marble 256] [--scale N]
 ctest --test-dir build
 ```
 
@@ -37,14 +37,15 @@ ctest --test-dir build
 | **D** | a drop somewhere (endless) |
 | **L** | switch between the endless pond and the intro, looped |
 | **C** | switch between 32-bit colour (hi-res) and the intro's 256 colours |
-| **M** | the marble at 256x256 (the intro's) or 512x512 (32-bit colour) |
+| **M** | the marble at 512x512 (smooth, the default) or 256x256 (the intro's), in 32-bit colour |
+| **G** | the grid and the marble in the top left corner: the 41x26 points where they read the marble, joined as the mapper interpolates them, coloured by their light level |
 | **R** | restart |
 | **Space** / **Esc** | pause / quit |
 
 Headless:
 
 ```bash
-ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256] [--res WxH] [--marble 512]
+ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256] [--res WxH] [--marble 256]
 ```
 
 This writes N frames, 70 a second, as `DIR/fNNNN.ppm`. The random drops
@@ -73,14 +74,16 @@ The picture is a grid of 41x26 points, one per 8x8 block. Each point holds
 the texture's u and v and a light level, as 32-bit fixed point.
 
 The **grid mapper** fills each block by stepping the four corners
-bilinearly. It works in 8.16 fixed point, in 24 bits, so the texture and
-the light levels wrap at 256. Down the left edge it steps by the corners'
-difference / 8, and across each row by a step that itself changes by
-1/8 of the bottom edge's minus the top edge's each row. The original splits
-each value between the high half of one register (the fraction) and a
-byte of another (the integer), joined by ADD/ADC, and reads its variables
-as dwords straddling two of them. The port writes this as plain 24-bit
-arithmetic, which gives the same pixels.
+bilinearly, and takes the whole part of each value modulo 256, so the
+texture and the light levels wrap at 256. Down the left edge it steps by
+the corners' difference / 8, and across each row by a step that itself
+changes by 1/8 of the bottom edge's minus the top edge's each row. The
+original works to 1/65536 (16 bits of fraction, split between registers
+and joined by ADD/ADC): the corners, the steps and the change are rounded
+down to that. The port does the same arithmetic in doubles, in texels and
+levels: every value is a multiple of 1/65536 no larger than a few hundred,
+which a double holds exactly, so the pixels are the same. (A float, with
+its 24-bit mantissa, rounds the sums: 11 of the test's frames differ.)
 
 A pixel is `light_table[level][texel]`. There are 65 levels, and level L
 maps texel J to `J·f + 128(1 − f)`, where `f = e^(L/13 − 1.5) − 0.02`.
@@ -127,11 +130,15 @@ channel. `toTrueColor()` draws the same water without these roundings, at
 any size:
 
 - Each pixel's centre is placed on the 320x200 screen, and u, v and the
-  light there are interpolated bilinearly between the four water points
-  around it, with their fractions kept. At 320x200 from the grid these
-  are the mapper's own pixel positions.
-- The marble is sampled bilinearly between its four nearest texels. It
-  wraps at 256, as the mapper's byte does.
+  light there are interpolated between the water points around it, with
+  their fractions kept. From the grid it is bilinear, between the four
+  points around it; at 320x200 these are the mapper's own pixel positions.
+  (The endless pond's water is computed at each pixel; drawn at another
+  size, it is interpolated with Catmull-Rom, between the 4x4 points
+  around.)
+- The marble is sampled between its 4x4 nearest texels (Catmull-Rom):
+  bilinear filtering, magnified, shows the texels as diamonds. It wraps at
+  256, as the mapper's byte does.
 - The light uses the tables' formula at the fractional level: below 64,
   `J·f + 128(1 − f)`; from 65, towards white by (L − 65)/64. Between 64
   and 65 the texel is left as it is, which both tables also give there.
@@ -144,12 +151,16 @@ The water points are the grid's (41x26, 8 pixels apart) in `--loop`: that
 is the intro's water, and a finer one would no longer be its picture. As u
 and v wrap at 256 texels, each point is placed from its neighbour by
 their difference, so that they interpolate without jumps. In the endless
-pond, `pondFrame()` also computes the rings' formula every 2 pixels (of
-320x200: 161x101 points, about 1.5 ms), for sharp ring fronts at high
-resolution; the 256-colour picture keeps the grid.
+pond, `pondFrame()` also computes the rings' formula at each pixel of the
+32-bit picture, in floats: a ring's front is a step in the light, which
+interpolated between points further apart shows as a zigzag. The step is
+spread over a pixel, so the front is a clean circle. At 1280x800 with
+about ten drops this takes about 6 ms; the 256-colour picture keeps the
+grid.
 
-The light formula is tabled per 1/256 level, and the picture is drawn in
-bands of rows, one per thread: 1280x800 takes about 2 ms.
+The light formula is tabled per 1/256 level, and both the water and the
+picture are computed in bands of rows, one per thread: the picture at
+1280x800 takes about 3 ms.
 
 The picture is the same, without the steps between texels and levels, and
 without the banding of the 6-bit gradients. The palettes are curves, so a
@@ -157,15 +168,25 @@ frame still holds only a few hundred colours, but they change smoothly.
 The few stray green pixels of the 256-colour picture in the endless pond
 do not appear.
 
-The marble is the intro's 256x256 tile by default: at 1280x800 a texel
-covers about 4 pixels, so it is a little soft. With **M** / `--marble 512`
-the 32-bit picture uses the same marble at 512x512. Each of the three
-fractals is made at 256 as the intro does, spread over the even texels of
-a 512 tile, and given one more diamond-square level for the odd ones (half
-the last level's strength, the generator going on where it stopped). The
-warp uses the same sine tables, twice as far. So its even texels are
-exactly the 256 marble (the test checks it), and the rest is one more
-octave of detail. It is made the first time it is asked for (about 3 ms).
+The 32-bit picture uses the marble at 512x512 by default (**M** /
+`--marble 256`: the intro's tile). The intro's marble has steps: its warp
+is tabled in whole texels, and a 1-level step of the fractals that drive
+it moves the marble by up to 3.5 texels at once. At 1280x800 a texel
+covers about 4 pixels, more where the rings stretch the picture, so these
+steps show as jagged edges in the waves. The 512 marble is made the same
+way without the roundings:
+
+- the three fractals are made at 256 with the intro's random numbers, but
+  with their means kept fractional (floats), spread over the even texels
+  of a 512 tile, and given one more diamond-square level for the odd ones
+  (half the last level's strength, the generator going on where it
+  stopped);
+- the warp is the intro's formula itself, twice as far, not its table, and
+  the first fractal is read bilinearly at the place it gives.
+
+It has the 256 marble's shapes (the test compares their 8x8-texel
+blocks), with smooth edges and finer grain. It is made the first time it
+is asked for (about 10 ms).
 
 ### Floating point
 
@@ -212,7 +233,9 @@ So the picture is exactly what the intro would draw with the marble in
 place of its logo texture.
 
 The 32-bit picture has no reference. The test checks that the 512x512
-marble holds the 256 one at its even texels. Every tenth frame, the
+marble has the 256 one's shapes: the means of their 8x8-texel blocks are
+about 15 apart (24 at most), against 77 for two unrelated parts of the
+marble. Every tenth frame, the
 picture is compared with the 256-colour one, and the mean difference per channel
 must stay under 16 (it reaches about 11, in the plane's red and yellow
 palette, whose sharp steps the filtering softens).

@@ -24,31 +24,31 @@ float cosPos(float a) {
 
 // The grid over 40x25 blocks of 8x8 pixels. In each block, u, v
 // and the light level are interpolated bilinearly from the four corners:
-// down the left edge row by row, then across each row pixel by pixel.
+// down the left edge row by row, then across each row pixel by pixel. A
+// pixel is light[level][tex[v][u]], each taken at its whole part, modulo
+// 256: the texture wraps at 256 texels, and the level too.
 //
-// The mapper keeps them in 8.16 fixed point (the grid's 8.24 shifted down
-// by 8), in 24 bits: the integer byte wraps, so the texture wraps at 256
-// and the level too. The steps are the corners' differences divided by 8
-// (>> 11 from 8.24), and the step across changes by 1/8 of the difference
-// between the bottom and top edges each row. A pixel is
-// light[level][tex[v][u]].
-//
-// (The original keeps the 16-bit fractions in the high halves of registers
-// and the integer bytes in other registers' low bytes, and joins them with
-// ADD/ADC; its variables are read as dwords straddling two of them, whose
-// lower halves are always zero. All this comes to the 24-bit arithmetic
-// here.)
+// In texels and levels, as doubles. The intro's mapper works to 1/65536:
+// the corners are cut down to that, and so are the steps (each a corner's
+// difference divided by 8, rounded down), and the step across changes each
+// row by 1/8 of the difference between the bottom and top edges' steps
+// (rounded down too). These are all multiples of 1/65536 of a few hundred
+// at most, which a double holds exactly (a float's 24 bits would not), so
+// the sums are the intro's to the bit.
 void Pond::gridMap() {
     struct Uvl {
-        uint32_t u, v, l;
+        double u, v, l;
         Uvl& operator+=(const Uvl& o) { return u += o.u, v += o.v, l += o.l, *this; }
     };
-    // (b - a) / 8 in 8.16: B - A in 8.24, >> 11 (arithmetic, as the intro does)
-    auto step = [](const Point& a, const Point& b) {
-        auto d = [](uint32_t x, uint32_t y) { return (uint32_t)((int32_t)(y - x) >> 11); };
-        return Uvl{d(a.u, b.u), d(a.v, b.v), d(a.light, b.light)};
+    constexpr double kFrac = 65536.0;                                       // the mapper's precision
+    auto cut = [](double x) { return std::floor(x * kFrac) / kFrac; };      // down to a multiple of 1/65536
+    auto value = [](uint32_t x) { return x / 16777216.0; };                 // the grid's 8.24: 0-256
+    // b - a, the shorter way round the 256 (as the grid's values wrap)
+    auto diff = [&](uint32_t a, uint32_t b) { return (int32_t)(b - a) / 16777216.0; };
+    auto step = [&](const Point& a, const Point& b) {   // (b - a) / 8
+        return Uvl{cut(diff(a.u, b.u) / 8), cut(diff(a.v, b.v) / 8), cut(diff(a.light, b.light) / 8)};
     };
-    auto byte2 = [](uint32_t x) { return (x >> 16) & 0xFF; };   // the integer byte of 8.16
+    auto whole = [](double x) { return (int)std::floor(x) & 0xFF; };     // the integer part, modulo 256
     const uint8_t* tex = tex_.data();
     const uint8_t* light = light_.data();
     for (int by = 0; by < 25; by++)
@@ -60,15 +60,14 @@ void Pond::gridMap() {
             Uvl across = step(p00, p10);              // per pixel along the row
             const Uvl down = step(p00, p01);          // the left edge, per row
             const Uvl bottom = step(p01, p11);
-            const Uvl turn = {(uint32_t)((int32_t)(bottom.u - across.u) >> 3),   // the step across, per row
-                              (uint32_t)((int32_t)(bottom.v - across.v) >> 3),
-                              (uint32_t)((int32_t)(bottom.l - across.l) >> 3)};
-            Uvl left = {p00.u >> 8, p00.v >> 8, p00.light >> 8};
+            const Uvl turn = {cut((bottom.u - across.u) / 8), cut((bottom.v - across.v) / 8),
+                              cut((bottom.l - across.l) / 8)};   // the step across, per row
+            Uvl left = {cut(value(p00.u)), cut(value(p00.v)), cut(value(p00.light))};
             uint8_t* row = screen_.data() + by * 8 * W + bx * 8;
             for (int y = 0; y < 8; y++, row += W) {
                 Uvl q = left;
                 for (int x = 0; x < 8; x++) {
-                    row[x] = light[byte2(q.l) << 8 | tex[byte2(q.v) << 8 | byte2(q.u)]];
+                    row[x] = light[whole(q.l) << 8 | tex[whole(q.v) << 8 | whole(q.u)]];
                     q += across;
                 }
                 left += down;

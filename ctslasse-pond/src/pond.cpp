@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <thread>
+#include <type_traits>
 
 #include "pond.h"
 
@@ -17,22 +18,41 @@ inline uint32_t next(uint32_t& seed) {
     return (uint32_t)((int32_t)seed >> 16);
 }
 
+// ROWS(from, to) over rows 0..H, in bands, one per thread (or in this one)
+template <class F>
+void inBands(int h, bool threaded, const F& rows) {
+    const int n = threaded ? (int)std::clamp(std::thread::hardware_concurrency(), 1u, 16u) : 1;
+    std::vector<std::thread> threads;
+    for (int b = 1; b < n; b++) threads.emplace_back(rows, h * b / n, h * (b + 1) / n);
+    rows(0, h / n);
+    for (std::thread& t : threads) t.join();
+}
+
 }  // namespace
 
 // --- the texture --------------------------------------------------------------------------
+
+namespace {
 
 // One level of a diamond-square fractal on a SIZE x SIZE tile (wrapping):
 // the points HALF apart between those already there, first the centres of
 // their squares, then the sides. Each is the mean of its four neighbours
 // plus a random part (scaled by AMP), clamped to 0..TOP. Row by row, left
-// to right, as the intro draws its random numbers in that order.
-void Pond::plasmaLevel(uint32_t& seed, uint8_t* t, int size, int32_t half, int32_t amp, int32_t top) {
+// to right, as the intro draws its random numbers in that order. In bytes
+// the mean is rounded, as the intro does; in floats it is kept whole.
+template <class T>
+void plasmaLevel(uint32_t& seed, T* t, int size, int32_t half, int32_t amp, int32_t top) {
     const int32_t mask = size - 1, shift = size == 512 ? 9 : 8;
-    auto at = [&](int32_t x, int32_t y) -> uint8_t& { return t[(y & mask) << shift | (x & mask)]; };
-    auto put = [&](int32_t x, int32_t y, int32_t sum, int32_t mul) {
+    auto at = [&](int32_t x, int32_t y) -> T& { return t[(y & mask) << shift | (x & mask)]; };
+    using Sum = std::conditional_t<std::is_same_v<T, uint8_t>, int32_t, T>;
+    auto put = [&](int32_t x, int32_t y, Sum sum, int32_t mul) {
         const int32_t r = (int32_t)next(seed) * mul * amp >> 17;
-        const int32_t v = (sum + r + 2) >> 2;
-        at(x, y) = (uint8_t)(v < 0 ? 0 : v > top ? top : v);
+        if constexpr (std::is_same_v<T, uint8_t>) {
+            const int32_t v = (sum + r + 2) >> 2;
+            at(x, y) = (uint8_t)(v < 0 ? 0 : v > top ? top : v);
+        } else {
+            at(x, y) = std::clamp((sum + (T)r) * (T)0.25, (T)0, (T)top);
+        }
     };
     const int32_t step = 2 * half;
     for (int32_t y = 0; y < size; y += step)          // the centres
@@ -45,75 +65,77 @@ void Pond::plasmaLevel(uint32_t& seed, uint8_t* t, int size, int32_t half, int32
         }
 }
 
-// A diamond-square fractal over the 256x256 tile: values 0..2^BITS-1, the
-// random part scaled by AMP, halved each level. SEED is left as the last
-// level left it.
-void Pond::plasma(uint32_t& seed, uint8_t* t, uint32_t amp, uint32_t bits) {
-    const int32_t top = (int32_t)(~(0xFFFFFFFFu << (bits & 31)));
-    t[0] = (uint8_t)(next(seed) & (uint32_t)top);
+// A diamond-square fractal over the 256x256 tile: values 0..255, the random
+// part scaled by AMP, halved each level. SEED is left as the last level left
+// it.
+template <class T>
+void plasma(uint32_t& seed, T* t, uint32_t amp) {
+    t[0] = (T)(next(seed) & 0xFF);
     for (int32_t half = 0x80; half; half >>= 1, amp = (uint32_t)((int32_t)amp >> 1))
-        plasmaLevel(seed, t, 256, half, (int32_t)amp, top);
+        plasmaLevel(seed, t, 256, half, (int32_t)amp, 0xFF);
 }
 
-// D = B, each pixel moved by TX[S] · SCALE across and TY[A] · SCALE down,
-// on a SIZE x SIZE tile (S may be D: each pixel is read before it is
-// written). The tables hold signed bytes.
-void Pond::displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const uint8_t* tx,
-                    const uint8_t* ty, int size, int scale) {
-    const uint32_t mask = size - 1, shift = size == 512 ? 9 : 8;
-    for (uint32_t k = 0; k < (uint32_t)(size * size); k++) {
-        const int32_t dx = (int8_t)tx[s[k]] * scale, dy = (int8_t)ty[a[k]] * scale;
-        d[k] = b[(((k >> shift) + dy) & mask) << shift | ((k + dx) & mask)];
-    }
-}
-
-namespace {
 // the three fractals: seeds and strengths
 constexpr uint32_t kSeed[3] = {0x12345678, 0x4D3, 0x477}, kAmp[3] = {0x2710, 0x64, 0x190};
+
+// The marble's warp: across by -70 sin(S / 20) texels, down by
+// 70 cos(A / 20), S and A the second and third fractals
+template <class T> T warpX(T s) { return std::sin(s * (T)0.05) * -70; }
+template <class T> T warpY(T a) { return std::cos(a * (T)0.05) * 70; }
+
 }  // namespace
 
-// The displacement tables, +-70 texels
-void Pond::warpTables(uint8_t* tx, uint8_t* ty) {
-    for (int32_t i = 0; i < 0x100; i++) {
-        tx[i] = (uint8_t)std::lrint(std::sin(X(i) * 0.05) * -70.0);
-        ty[i] = (uint8_t)std::lrint(std::cos(X(i) * 0.05) * 70.0);
-    }
-}
-
-// The texture part 8 shows: a marble (a fractal warped by two more through
-// sine tables). The intro also embosses its logo into it; that step
-// is left out, so only the background remains.
+// The texture part 8 shows: a marble, the first fractal warped by the other
+// two: D = B, each texel moved across by TX[S] and down by TY[A] (the warp
+// rounded to whole texels, in tables of signed bytes). The intro also
+// embosses its logo into it; that step is left out, so only the background
+// remains.
 void Pond::precalc() {
     std::vector<uint8_t> t(0x30000);
     for (int n = 0; n < 3; n++) {
         uint32_t seed = kSeed[n];
-        plasma(seed, t.data() + 0x10000 * n, kAmp[n], 8);
+        plasma(seed, t.data() + 0x10000 * n, kAmp[n]);
     }
-    uint8_t tx[256], ty[256];
-    warpTables(tx, ty);
-    displace(t.data() + 0x20000, t.data(), t.data() + 0x10000, tex_.data(), tx, ty, 256, 1);
+    const uint8_t *b = t.data(), *s = b + 0x10000, *a = b + 0x20000;
+    int8_t tx[256], ty[256];
+    for (int i = 0; i < 256; i++) tx[i] = (int8_t)std::lrint(warpX(X(i))), ty[i] = (int8_t)std::lrint(warpY(X(i)));
+    for (uint32_t k = 0; k < 0x10000; k++)
+        tex_[k] = b[(((k >> 8) + ty[a[k]]) & 0xFF) << 8 | ((k + tx[s[k]]) & 0xFF)];
 }
 
-// The same marble at 512x512, for the 32-bit picture: each fractal made at
-// 256 as the intro does, spread over the even texels of a 512 tile, and
-// given one more level for the odd ones (with half the last level's
-// strength, the generator going on from where it was); then warped by the
-// same tables, twice as far. Its even texels are the 256 marble's; the rest
-// is a finer octave of detail.
+// The same marble at 512x512, for the 32-bit picture, without the intro's
+// roundings, which show as steps when the picture is magnified: each
+// fractal made at 256 with the intro's random numbers but its means kept
+// fractional, spread over the even texels of a 512 tile, and given one more
+// level for the odd ones (half the last level's strength, the generator
+// going on from where it was). Then warped as the intro does, twice as far,
+// by the warp itself, not its table rounded to whole texels, and the first
+// fractal is read between its four texels around the place the warp gives.
+// (The intro's 1-level steps of S and A move the marble by up to 3.5 texels
+// at once: that is the 256 marble's jagged edges.)
 void Pond::precalc512() {
-    std::vector<uint8_t> small(0x10000), t(3 * 0x40000);
+    std::vector<float> small(0x10000), t(3 * 0x40000);
     for (int n = 0; n < 3; n++) {
         uint32_t seed = kSeed[n];
-        plasma(seed, small.data(), kAmp[n], 8);
-        uint8_t* big = t.data() + 0x40000 * n;
+        plasma(seed, small.data(), kAmp[n]);
+        float* big = t.data() + 0x40000 * n;
         for (int y = 0; y < 256; y++)
             for (int x = 0; x < 256; x++) big[(2 * y) << 9 | 2 * x] = small[y << 8 | x];
         plasmaLevel(seed, big, 512, 1, (int32_t)(kAmp[n] >> 8), 0xFF);
     }
-    uint8_t tx[256], ty[256];
-    warpTables(tx, ty);
+    const float *b = t.data(), *s = b + 0x40000, *a = b + 0x80000;
     tex512_.resize(0x40000);
-    displace(t.data() + 0x80000, t.data(), t.data() + 0x40000, tex512_.data(), tx, ty, 512, 2);
+    for (int y = 0; y < 512; y++)
+        for (int x = 0; x < 512; x++) {
+            const int k = y << 9 | x;
+            const double px = x + 2 * warpX<double>(s[k]), py = y + 2 * warpY<double>(a[k]);
+            const double fx = std::floor(px), fy = std::floor(py);
+            const int x0 = (int)fx & 511, y0 = (int)fy & 511, x1 = (x0 + 1) & 511, y1 = (y0 + 1) & 511;
+            const double ax = px - fx, ay = py - fy;
+            const double t0 = b[y0 << 9 | x0] + (b[y0 << 9 | x1] - b[y0 << 9 | x0]) * ax;
+            const double t1 = b[y1 << 9 | x0] + (b[y1 << 9 | x1] - b[y1 << 9 | x0]) * ax;
+            tex512_[k] = (uint8_t)std::lround(std::clamp(t0 + (t1 - t0) * ay, 0.0, 255.0));
+        }
 }
 
 void Pond::setMarble(int size) {
@@ -283,36 +305,42 @@ namespace {
 
 // The water at a point (cells across and down, fractional allowed): u and v
 // in 16.16 (a cell is 8000h), the light (3F000h at rest).
+template <class T>
 struct Uvl {
-    double u, v, light;
+    T u, v, light;
 };
 
-// The intro's ring for each drop (bubbles()), in doubles: inside the ring
-// (A = distance - radius < 0) a point is pushed out from the centre by
-// sin(A) S times its distance, S = 2048 · 8 / (8 - A) for the first drop and
-// 2730.67 · 4 / (4 - A) for the others: the ring's front strongest, the
-// ripples behind it dying out. The light rises by max(cos A, 0) · S · 50.
-Uvl water(double gx, double gy, float t, const std::vector<Drop>& drops) {
-    Uvl w = {gx * 32768.0, gy * 32768.0, 258048.0};
+// The intro's ring for each drop (bubbles()), in doubles for the grid, in
+// floats for the water at each pixel (faster, and as good for the picture):
+// inside the ring (A = distance - radius < 0) a point is pushed out from the
+// centre by sin(A) S times its distance, S = 2048 · 8 / (8 - A) for the
+// first drop and 2730.67 · 4 / (4 - A) for the others: the ring's front
+// strongest, the ripples behind it dying out. The light rises by
+// max(cos A, 0) · S · 50. EDGE: the width (cells) over which the light
+// comes in at the ring's front, for an edge without steps (0: at once).
+template <class T>
+Uvl<T> water(T gx, T gy, float t, const std::vector<Drop>& drops, T edge = 0) {
+    Uvl<T> w = {gx * 32768, gy * 32768, 258048};
     for (const Drop& d : drops) {
-        const double r = 8.0 * (t - d.t);
+        const T r = 8 * ((T)t - d.t);
         if (r <= 0) continue;
-        const double dx = gx - d.x, dy = gy - d.y;
-        const double a = std::sqrt(dx * dx + dy * dy) - r;
+        const T dx = gx - d.x, dy = gy - d.y;
+        const T a = std::sqrt(dx * dx + dy * dy) - r;
         if (a > 0) continue;
-        double s = d.first ? 2048.0 * 8 / (8 - a) : 2730.666666666666 * 4 / (4 - a);
+        T s = d.first ? 2048 * 8 / (8 - a) : (T)2730.666666666666 * 4 / (4 - a);
         if (r > kFadeFrom) s *= (kFadeTo - r) / (kFadeTo - kFadeFrom);
-        const double g = std::sin(a) * s;
+        const T g = std::sin(a) * s;
         w.u += dx * g, w.v += dy * g;
-        w.light += std::max(std::cos(a), 0.0) * s * 50;
+        const T in = edge > 0 ? std::min(-a / edge, (T)1) : 1;
+        w.light += std::max(std::cos(a), (T)0) * s * 50 * in;
     }
-    w.light = std::min(w.light, (double)(0x81 << 12) + 4095);   // the last level
+    w.light = std::min(w.light, (T)((0x81 << 12) + 4095));   // the last level
     return w;
 }
 
 }  // namespace
 
-void Pond::pondFrame(float t, const std::vector<Drop>& drops, int cell) {
+void Pond::pondFrame(float t, const std::vector<Drop>& drops, int w, int h) {
     dacSet_ = false;                // frame() after this: set it again
     // the palette: in from white (pal3) over T 0-0.5, to blue over 0.5-1.5
     if (t < 0.5f) setDac(3, (int32_t)std::lround(t * 128), 0, 0);
@@ -320,26 +348,33 @@ void Pond::pondFrame(float t, const std::vector<Drop>& drops, int cell) {
     else copyDac(2);
     for (int gy = 0; gy < kGridH; gy++)
         for (int gx = 0; gx < kGridW; gx++) {
-            const Uvl w = water(gx, gy, t, drops);
+            const Uvl<double> w = water<double>(gx, gy, t, drops);
             // as the blend leaves them: times 4096
             grid_[gy * kGridW + gx] = {(uint32_t)(int32_t)std::lround(w.u) << 12,
                                        (uint32_t)(int32_t)std::lround(w.v) << 12,
                                        (uint32_t)(int32_t)std::lround(w.light) << 12};
         }
     gridMap();
-    if (cell >= 8) {
+    if (w <= 0 || h <= 0) {
         fieldFromGrid();
         return;
     }
-    // the finer water: 16.16 / 4096 is texels (u, v) and levels (the light)
+    // The water at each pixel's centre: the ring's front is a step in the
+    // light, which interpolated between points further apart shows as a
+    // zigzag. Here the step is spread over a pixel. 16.16 / 4096 is texels (u, v) and levels (the light).
     Field& f = field_;
-    f.cell = cell, f.nx = W / cell + 1, f.ny = H / cell + 1;
-    f.u.resize(f.nx * f.ny), f.v.resize(f.nx * f.ny), f.l.resize(f.nx * f.ny);
-    for (int j = 0, k = 0; j < f.ny; j++)
-        for (int i = 0; i < f.nx; i++, k++) {
-            const Uvl w = water(i * cell / 8.0, j * cell / 8.0, t, drops);
-            f.u[k] = w.u / 4096, f.v[k] = w.v / 4096, f.l[k] = w.light / 4096;
-        }
+    f.nx = w, f.ny = h, f.cx = (double)W / w, f.cy = (double)H / h, f.ox = f.cx / 2 - 0.5, f.oy = f.cy / 2 - 0.5;
+    f.u.resize((size_t)w * h), f.v.resize((size_t)w * h), f.l.resize((size_t)w * h);
+    const float edge = (float)(f.cx / 8);   // a pixel
+    auto rows = [&](int from, int to) {
+        for (int j = from; j < to; j++)
+            for (int i = 0; i < w; i++) {
+                const size_t k = (size_t)j * w + i;
+                const Uvl<float> q = water<float>((float)((f.ox + i * f.cx) / 8), (float)((f.oy + j * f.cy) / 8), t, drops, edge);
+                f.u[k] = q.u / 4096, f.v[k] = q.v / 4096, f.l[k] = q.light / 4096;
+            }
+    };
+    inBands(h, w * h >= 200000, rows);
 }
 
 void Pond::toArgb(uint32_t* out) const {
@@ -360,7 +395,7 @@ void Pond::toArgb(uint32_t* out) const {
 // they stay continuous to interpolate.
 void Pond::fieldFromGrid() {
     Field& f = field_;
-    f.cell = 8, f.nx = kGridW, f.ny = kGridH;
+    f.cx = f.cy = 8, f.ox = f.oy = 0, f.nx = kGridW, f.ny = kGridH;
     f.u.resize(grid_.size()), f.v.resize(grid_.size()), f.l.resize(grid_.size());
     constexpr double k = 1.0 / 16777216.0;
     for (int i = 0; i < (int)grid_.size(); i++) {
@@ -378,11 +413,14 @@ void Pond::fieldFromGrid() {
 
 // The grid mapper's picture without its roundings, at any size. Each
 // pixel's place on the 320x200 screen (its centre) is found in the water,
-// whose u, v and light are interpolated bilinearly between the four points
-// around it (at 320x200 from the grid: the mapper's own positions). Then,
-// kept fractional:
-// - the marble is sampled bilinearly between its four nearest texels (it
-//   wraps at 256, as the mapper's byte does);
+// whose u, v and light are interpolated between the points around it:
+// from the grid bilinearly (at 320x200 the mapper's own positions), from
+// pondFrame()'s finer water between the 4x4 around it (Catmull-Rom: the
+// curve goes through the points, and its slope is continuous, so the waves
+// show no facets between them). Then, kept fractional:
+// - the marble is sampled between its 4x4 nearest texels, also Catmull-Rom
+//   (bilinear, magnified, shows the texels as diamonds); it wraps at 256,
+//   as the mapper's byte does;
 // - the light level is continuous: below 64, the texel J goes to
 //   J f + 128 (1 - f) with f at the fractional level; from 65, towards
 //   white by (L - 65) / 64; between, J as it is (both tables give J there).
@@ -399,43 +437,71 @@ void Pond::toTrueColor(uint32_t* out, int w, int h) const {
     float lut[257 * 3];                           // the DAC in 0-255 (the last entry repeated)
     for (int i = 0; i < 768; i++) lut[i] = dacF_[i] * (255.0f / 63.0f);
     for (int c = 0; c < 3; c++) lut[768 + c] = lut[765 + c];
-    // a pixel's place in the field: the point before it and the fraction
-    struct Place {
-        int at;
-        float frac;
+    // Catmull-Rom's weights for the points before and after: at 0 the
+    // second point, at 1 the third
+    struct Cubic {
+        float w[4];
     };
-    auto place = [&](int p, int size, int screen, int points) {
-        const double s = ((p + 0.5) * screen / size - 0.5) / f.cell;
+    auto cubic = [](float t) {
+        const float t2 = t * t, t3 = t2 * t;
+        return Cubic{{0.5f * (-t3 + 2 * t2 - t), 0.5f * (3 * t3 - 5 * t2 + 2), 0.5f * (-3 * t3 + 4 * t2 + t),
+                      0.5f * (t3 - t2)}};
+    };
+    // a pixel's place in the field: its four points (clamped at the edges)
+    // and their weights. The grid (8 pixels apart) is interpolated linearly,
+    // as the mapper does: its rings are only a few points wide, and the
+    // curve would overshoot them.
+    const bool fine = f.cx < 8;
+    struct Place {
+        int at[4];
+        Cubic c;
+    };
+    auto place = [&](int p, int size, int screen, int points, double first, double apart) {
+        const double s = ((p + 0.5) * screen / size - 0.5 - first) / apart;
         const double c = std::clamp(s, 0.0, points - 1.0);
-        const int at = std::min((int)c, points - 2);
-        return Place{at, (float)(c - at)};
+        const int i = std::min((int)c, points - 2);
+        const float t = (float)(c - i);
+        Place r{{}, fine ? cubic(t) : Cubic{{0, 1 - t, t, 0}}};
+        for (int k = 0; k < 4; k++) r.at[k] = std::clamp(i - 1 + k, 0, points - 1);
+        return r;
     };
     std::vector<Place> cols(w);
-    for (int px = 0; px < w; px++) cols[px] = place(px, w, W, f.nx);
+    for (int px = 0; px < w; px++) cols[px] = place(px, w, W, f.nx, f.ox, f.cx);
     const int top = (int)litA_.size() - 1;
     auto rows = [&](int from, int to) {
         // one row of the field, interpolated down to this pixel row
         std::vector<float> u(f.nx), v(f.nx), l(f.nx);
         for (int py = from; py < to; py++) {
-            const Place r = place(py, h, H, f.ny);
-            for (int i = 0, k = r.at * f.nx; i < f.nx; i++, k++) {
-                u[i] = (float)(f.u[k] + (f.u[k + f.nx] - f.u[k]) * r.frac);
-                v[i] = (float)(f.v[k] + (f.v[k + f.nx] - f.v[k]) * r.frac);
-                l[i] = (float)(f.l[k] + (f.l[k + f.nx] - f.l[k]) * r.frac);
+            const Place r = place(py, h, H, f.ny, f.oy, f.cy);
+            for (int i = 0; i < f.nx; i++) {
+                float su = 0, sv = 0, sl = 0;
+                for (int k = 0; k < 4; k++) {
+                    const int n = r.at[k] * f.nx + i;
+                    su += f.u[n] * r.c.w[k], sv += f.v[n] * r.c.w[k], sl += f.l[n] * r.c.w[k];
+                }
+                u[i] = (float)su, v[i] = (float)sv, l[i] = (float)sl;
             }
             uint32_t* o = out + (size_t)py * w;
             for (int px = 0; px < w; px++) {
-                const Place c = cols[px];
-                auto at = [&](const std::vector<float>& q) { return q[c.at] + (q[c.at + 1] - q[c.at]) * c.frac; };
-                // the marble, between its four nearest texels (u and v stay well within an int)
+                const Place& c = cols[px];
+                auto at = [&](const std::vector<float>& q) {
+                    return q[c.at[0]] * c.c.w[0] + q[c.at[1]] * c.c.w[1] + q[c.at[2]] * c.c.w[2] +
+                           q[c.at[3]] * c.c.w[3];
+                };
+                // the marble, between its 4x4 nearest texels (u and v stay well within an int)
                 const float tu = at(u) * texScale - 0.5f, tv = at(v) * texScale - 0.5f;
                 const float fu = std::floor(tu), fv = std::floor(tv);
-                const int x0 = (int)fu & mask, y0 = ((int)fv & mask) << shift;
-                const int x1 = (x0 + 1) & mask, y1 = (y0 + (1 << shift)) & (mask << shift);
-                const float au = tu - fu, av = tv - fv;
-                const float t0 = tex[y0 | x0] + (tex[y0 | x1] - tex[y0 | x0]) * au;
-                const float t1 = tex[y1 | x0] + (tex[y1 | x1] - tex[y1 | x0]) * au;
-                const float j = t0 + (t1 - t0) * av;
+                const Cubic cu = cubic(tu - fu), cv = cubic(tv - fv);
+                const int x = (int)fu - 1, y = (int)fv - 1;
+                int xs[4];
+                for (int k = 0; k < 4; k++) xs[k] = (x + k) & mask;
+                float j = 0;
+                for (int m = 0; m < 4; m++) {
+                    const uint8_t* line = tex + (((y + m) & mask) << shift);
+                    j += (line[xs[0]] * cu.w[0] + line[xs[1]] * cu.w[1] + line[xs[2]] * cu.w[2] +
+                          line[xs[3]] * cu.w[3]) * cv.w[m];
+                }
+                j = std::clamp(j, 0.0f, 255.0f);   // Catmull-Rom overshoots a little at edges
                 // lit, then between two palette entries
                 const int lvl = std::clamp((int)(at(l) * 256 + 0.5f), 0, top);
                 const float idx = std::clamp(j * litA_[lvl] + litB_[lvl], 0.0f, 255.0f);
@@ -447,12 +513,7 @@ void Pond::toTrueColor(uint32_t* out, int w, int h) const {
             }
         }
     };
-    // in bands of rows, one per thread (small pictures in one)
-    const int n = w * h < 200000 ? 1 : (int)std::clamp(std::thread::hardware_concurrency(), 1u, 16u);
-    std::vector<std::thread> threads;
-    for (int b = 1; b < n; b++) threads.emplace_back(rows, h * b / n, h * (b + 1) / n);
-    rows(0, h / n);
-    for (std::thread& t : threads) t.join();
+    inBands(h, w * h >= 200000, rows);
 }
 
 }  // namespace pond

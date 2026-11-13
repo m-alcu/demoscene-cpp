@@ -6,7 +6,7 @@
 // embossing the logo; its DAC and grid are the original's.
 // The 32-bit picture has no reference: every 10th frame, it is checked to
 // stay close to the 256-colour one (the mean difference per channel). The
-// 512x512 marble is checked to hold the 256 one at its even texels.
+// 512x512 marble is checked to have the 256 one's shapes.
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -96,11 +96,24 @@ int main(int argc, char** argv) {
     {
         pond::Pond q;
         q.setMarble(512);
-        int differ = 0;
-        for (int y = 0; y < 256; y++)
-            for (int x = 0; x < 256; x++) differ += q.texture512()[(2 * y) << 9 | 2 * x] != q.texture()[y << 8 | x];
-        std::printf("512 marble: %d of its even texels differ from the 256 one\n", differ);
-        failures += differ != 0;
+        // texel by texel they differ (the warp's steps are gone, which moves
+        // the marble's grain), so its shapes: the means of 8x8-texel blocks
+        // (16x16 in the 512 marble). About 15 apart; the 256 marble against
+        // itself half a tile away (another part of it) is 77.
+        double sum = 0;
+        for (int by = 0; by < 32; by++)
+            for (int bx = 0; bx < 32; bx++) {
+                int m256 = 0, m512 = 0;
+                for (int y = 0; y < 16; y++)
+                    for (int x = 0; x < 16; x++) {
+                        m512 += q.texture512()[(16 * by + y) << 9 | (16 * bx + x)];
+                        if (x < 8 && y < 8) m256 += q.texture()[(8 * by + y) << 8 | (8 * bx + x)];
+                    }
+                sum += std::abs(m512 / 256.0 - m256 / 64.0);
+            }
+        const double mean = sum / 1024;
+        std::printf("512 marble: its 8x8 blocks %.2f from the 256 one's on average\n", mean);
+        failures += mean > 24;
     }
     std::printf("%d frames, %d differ\n", frames, bad);
     std::printf("32-bit colour: at most %.2f from the 256 colours per channel, on average; %d frames too far\n", worst,
