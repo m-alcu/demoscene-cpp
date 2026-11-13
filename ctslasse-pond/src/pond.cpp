@@ -10,8 +10,6 @@ namespace pond {
 
 namespace {
 
-#include "data.inc"
-
 // 16D9Ch: the precalculation's generator; the new seed's high half (signed)
 inline uint32_t next(uint32_t& seed) {
     seed = seed * 0x15A4E35u + 1;
@@ -19,18 +17,6 @@ inline uint32_t next(uint32_t& seed) {
 }
 
 }  // namespace
-
-double Pond::f64(uint32_t a) {
-    double v;
-    std::memcpy(&v, kConst + (a - 0x28C00), 8);
-    return v;
-}
-
-float Pond::f32(uint32_t a) {
-    float v;
-    std::memcpy(&v, kConst + (a - 0x28C00), 4);
-    return v;
-}
 
 uint32_t Pond::r32(uint32_t a) const {
     uint32_t v;
@@ -95,15 +81,15 @@ void Pond::precalc() {
     for (int32_t i = 0; i < 0x100; i++) {   // 18EAFh
         F.fld((X)i);
         const double di = F.fstd();
-        F.fmul(f64(0x28D20));
+        F.fmul(0.05);
         F.fsin();
-        F.fmul(f64(0x28D28));
-        F.fld(di), F.fmul(f64(0x28D20));
+        F.fmul(-70.0);
+        F.fld(di), F.fmul(0.05);
         F.fxch();
         F.frndint();
         tx[i] = (uint8_t)F.fistp();
         F.fcos();
-        F.fmul(f64(0x28D30));
+        F.fmul(70.0);
         F.frndint();
         ty[i] = (uint8_t)F.fistp();
     }
@@ -119,17 +105,17 @@ void Pond::lightTables() {
     int32_t lvl = 0x40, acc = 0;
     for (int32_t row = 0; row <= 0x40; row++, lvl--, acc += 0xFF) {
         const int32_t step = -row;
-        F.fld((X)lvl), F.fmul(f64(0x29444)), F.fsubr(f64(0x294B8));
+        F.fld((X)lvl), F.fmul(0.07692307692307693), F.fsubr(1.5);   // 1/13
         F.fldl2e(), F.fmulp();
         F.exp2();
-        F.fadd(f64(0x294F8));
+        F.fadd(-0.02);
         F.fld1();
         F.fxch();
         float f = F.fstpf();
         if (F.fcomp(f).jb()) f = 1.0f;
         int32_t s = acc;
         for (int32_t j = 0; j < 0x100; j++, s += step) {
-            F.fld(f), F.fld((X)j), F.fmulst(1), F.fld1(), F.fsubrp(2), F.fxch(), F.fmul(f32(0x29440)), F.faddp();
+            F.fld(f), F.fld((X)j), F.fmulst(1), F.fld1(), F.fsubrp(2), F.fxch(), F.fmul(128.0f), F.faddp();
             F.frndint();
             w8(light + row * 0x100 + j, (uint32_t)F.fistp());
             w8(light + 0x4100 + row * 0x100 + j, (uint32_t)(s / 64 + j));
@@ -149,25 +135,45 @@ void Pond::gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1
     }
 }
 
+void Pond::gradient(float* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1, int32_t n) {
+    for (int32_t i = 0; i < n; i++) {
+        *dst++ = (float)(r0 * (n - i) + r1 * i) / n;
+        *dst++ = (float)(g0 * (n - i) + g1 * i) / n;
+        *dst++ = (float)(b0 * (n - i) + b1 * i) / n;
+    }
+}
+
+// pal1: green-grey - purple - light blue - black - red - yellow;
+// pal2: black - blue - white; pal3: black - white. Each also unrounded.
+void Pond::palettes() {
+    auto both = [&](int pal, int at, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
+                    int32_t n) {
+        gradient(pal_[pal] + at, r0, g0, b0, r1, g1, b1, n);
+        gradient(palF_[pal] + at, r0, g0, b0, r1, g1, b1, n);
+    };
+    both(1, 0x000, 5, 8, 1, 6, 3, 0x1E, 0x40);
+    both(1, 0x0C0, 6, 3, 0x1E, 0x0A, 0x23, 0x3C, 0x40);
+    both(1, 0x180, 0x0A, 0x23, 0x3C, 0, 0, 0, 0x40);
+    both(1, 0x240, 0, 0, 0, 0x3F, 0, 0, 0x20);
+    both(1, 0x2A0, 0x3F, 0, 0, 0x3F, 0x3F, 0, 0x20);
+    both(3, 0, 0, 0, 0, 0x3F, 0x3F, 0x3F, 0x100);
+    both(2, 0, 0, 0, 0, 0x10, 0x20, 0x40, 0x80);
+    both(2, 0x180, 0x10, 0x20, 0x40, 0x3F, 0x3F, 0x3F, 0x80);
+}
+
 Pond::Pond() : memory_(0x40000, 0), mem_(memory_.data()) {
     precalc();
     lightTables();
-    // pal1: green-grey - purple - light blue - black - red - yellow;
-    // pal2: black - blue - white; pal3: black - white
-    gradient(pal1_ + 0x000, 5, 8, 1, 6, 3, 0x1E, 0x40);
-    gradient(pal1_ + 0x0C0, 6, 3, 0x1E, 0x0A, 0x23, 0x3C, 0x40);
-    gradient(pal1_ + 0x180, 0x0A, 0x23, 0x3C, 0, 0, 0, 0x40);
-    gradient(pal1_ + 0x240, 0, 0, 0, 0x3F, 0, 0, 0x20);
-    gradient(pal1_ + 0x2A0, 0x3F, 0, 0, 0x3F, 0x3F, 0, 0x20);
-    gradient(pal3_, 0, 0, 0, 0x3F, 0x3F, 0x3F, 0x100);
-    gradient(pal2_, 0, 0, 0, 0x10, 0x20, 0x40, 0x80);
-    gradient(pal2_ + 0x180, 0x10, 0x20, 0x40, 0x3F, 0x3F, 0x3F, 0x80);
+    palettes();
     std::memset(dac_, 0x3F, sizeof dac_);  // the part before ends in white
+    std::fill(dacF_, dacF_ + 768, 63.0f);
 }
 
 // The DAC: MODE 0 SRC towards white (K 0: white, 64: SRC), 1 SRC and MIX
-// mixed (K 0: MIX, 64: SRC), 2 SRC faded (K 0: black)
-void Pond::setDac(const uint8_t* src, int32_t k, const uint8_t* mix, int mode) {
+// mixed (K 0: MIX, 64: SRC), 2 SRC faded (K 0: black). The unrounded DAC
+// alongside.
+void Pond::setDac(int srcPal, int32_t k, int mixPal, int mode) {
+    const uint8_t *src = pal_[srcPal], *mix = pal_[mixPal];
     for (int i = 0; i < 768; i++) {
         int32_t v;
         if (mode == 0) v = ((int32_t)src[i] * k + 0xFC0 - k * 0x3F) >> 6;
@@ -175,60 +181,72 @@ void Pond::setDac(const uint8_t* src, int32_t k, const uint8_t* mix, int mode) {
         else v = ((int32_t)src[i] * k) >> 6;
         dac_[i] = (uint8_t)(v & 0x3F);
     }
+    const float kf = std::clamp(k, 0, 64) / 64.0f;
+    const float *sf = palF_[srcPal], *mf = palF_[mixPal];
+    for (int i = 0; i < 768; i++) {
+        float v;
+        if (mode == 0) v = sf[i] * kf + 63 * (1 - kf);
+        else if (mode == 1) v = mf[i] * (1 - kf) + sf[i] * kf;
+        else v = sf[i] * kf;
+        dacF_[i] = std::clamp(v, 0.0f, 63.0f);
+    }
+}
+
+void Pond::copyDac(int pal) {
+    std::memcpy(dac_, pal_[pal], sizeof dac_);
+    std::memcpy(dacF_, palF_[pal], sizeof dacF_);
 }
 
 // --- the intro's frame ------------------------------------------------------------------------
 
 void Pond::frame(int32_t clock) {
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    auto Fl = [&](uint32_t a) { return (X)f32(a); };
-    auto cmpF = [&](float v, uint32_t c) { F.fld(v); return F.fcomp(f32(c)); };
+    auto cmpF = [&](float v, float c) { F.fld(v); return F.fcomp(c); };
     const uint32_t grid = kGrid, grid2 = kGrid + 0x31F8;
     (void)grid2;
     F.fld((X)clock);
-    F.fdiv(D(0x29500));
+    F.fdiv(kUnit);
     const float T = F.fstf();
     const double dT = F.fstd();
     // the palettes: in from white over T 0-0.5 (black-white), to black-blue-
     // white over 0.5-1.5, to pal1 over 8-12, out over 68-72
-    if (F.fcomp(D(0x294EC)).jb()) {
-        F.fld(T), F.fmul(Fl(0x29454)), F.fmul(Fl(0x29458));
+    if (F.fcomp(0.5).jb()) {
+        F.fld(T), F.fmul(2.0f), F.fmul(64.0f);
         F.frndint();
-        setDac(pal3_, F.fistp(), nullptr, 0);
-    } else if (F.fld(dT), F.fcomp(D(0x294B8)).jb()) {
-        F.fld(dT), F.fadd(D(0x2954C)), F.fmul(D(0x2944C));
+        setDac(3, F.fistp(), 0, 0);
+    } else if (F.fld(dT), F.fcomp(1.5).jb()) {
+        F.fld(dT), F.fadd(-0.5), F.fmul(64.0);
         F.frndint();
-        setDac(pal2_, F.fistp(), pal3_, 1);
+        setDac(2, F.fistp(), 3, 1);
     }
     else if (!dacSet_) {
         // started past the fade-in (never in the intro): the palette in full
-        std::memcpy(dac_, pal2_, sizeof dac_);
+        copyDac(2);
     }
     dacSet_ = true;
-    if (cmpF(T, 0x294C0).ja() && cmpF(T, 0x29508).jb()) {
-        F.fld(T), F.fadd(Fl(0x2950C)), F.fmul(Fl(0x2945C));
+    if (cmpF(T, 8.0f).ja() && cmpF(T, 12.0f).jb()) {
+        F.fld(T), F.fadd(-8.0f), F.fmul(16.0f);
         F.frndint();
-        setDac(pal1_, F.fistp(), pal2_, 1);
+        setDac(1, F.fistp(), 2, 1);
     }
-    if (cmpF(T, 0x29510).ja()) {
-        F.fld(Fl(0x29554)), F.fsub(T), F.fmul(Fl(0x2945C));
+    if (cmpF(T, 68.0f).ja()) {
+        F.fld(72.0f), F.fsub(T), F.fmul(16.0f);
         F.frndint();
-        setDac(pal1_, F.fistp(), nullptr, 2);
+        setDac(1, F.fistp(), 0, 2);
     }
     // the drops until T 12, the plane from T 8 (the tunnel from T 33 is not here)
-    if (cmpF(T, 0x29508).jb()) bubbles(grid, T);
-    if (cmpF(T, 0x294C0).ja() && cmpF(T, 0x29514).jb()) wobble(grid, T);
+    if (cmpF(T, 12.0f).jb()) bubbles(grid, T);
+    if (cmpF(T, 8.0f).ja() && cmpF(T, 38.0f).jb()) wobble(grid, T);
     // grid = grid a + grid2 b, b rising over T 8-12
     float w = 0;
-    if (cmpF(T, 0x294C0).ja()) {
-        F.fld(T), F.fadd(Fl(0x2950C)), F.fmul(Fl(0x294A4)), F.fmul(D(0x29484)), F.fcos();
-        F.fld1(), F.fsubrp(1), F.fmul(D(0x294EC));
+    if (cmpF(T, 8.0f).ja()) {
+        F.fld(T), F.fadd(-8.0f), F.fmul(0.25f), F.fmul(3.141592653589793), F.fcos();
+        F.fld1(), F.fsubrp(1), F.fmul(0.5);
         w = F.fstpf();
     }
-    if (cmpF(T, 0x29508).ja()) w = 1.0f;
+    if (cmpF(T, 12.0f).ja()) w = 1.0f;
     if (F.fldz(), F.fcomp(w).ja()) w = 0;
     if (F.fld1(), F.fcomp(w).jb()) w = 1.0f;
-    F.fld(Fl(0x29460));
+    F.fld(4096.0f);
     F.fld(w), F.fmulst(1);
     w = F.fstf();
     F.frndint();
@@ -264,9 +282,9 @@ bool Pond::dropDone(const Drop& d, float t) { return 8 * (t - d.t) >= kFadeTo; }
 void Pond::pondFrame(float t, const std::vector<Drop>& drops) {
     dacSet_ = false;                // frame() after this: set it again
     // the palette: in from white (pal3) over T 0-0.5, to blue over 0.5-1.5
-    if (t < 0.5f) setDac(pal3_, (int32_t)std::lround(t * 128), nullptr, 0);
-    else if (t < 1.5f) setDac(pal2_, (int32_t)std::lround((t - 0.5) * 64), pal3_, 1);
-    else std::memcpy(dac_, pal2_, sizeof dac_);
+    if (t < 0.5f) setDac(3, (int32_t)std::lround(t * 128), 0, 0);
+    else if (t < 1.5f) setDac(2, (int32_t)std::lround((t - 0.5) * 64), 3, 1);
+    else copyDac(2);
     for (int gy = 0; gy <= 25; gy++)
         for (int gx = 0; gx <= 40; gx++) {
             double u = gx * 32768.0, v = gy * 32768.0, light = 258048.0;
@@ -300,6 +318,78 @@ void Pond::toArgb(uint32_t* out) const {
     }
     const uint8_t* s = screen();
     for (int i = 0; i < W * H; i++) out[i] = lut[s[i]];
+}
+
+// --- 32-bit colour --------------------------------------------------------------------------
+
+// The grid mapper's picture without its roundings. Per 8x8 block, the four
+// corners' u, v and light are interpolated bilinearly at the same pixel
+// positions as the mapper's (corner + i/8, j/8), but kept fractional:
+// - the marble is sampled bilinearly between its four nearest texels (it
+//   wraps at 256, as the mapper's byte does);
+// - the light level is continuous: below 64, the texel J goes to
+//   J f + 128 (1 - f) with f at the fractional level; from 65, towards
+//   white by (L - 65) / 64; between, J as it is (both tables give J there);
+// - the palette index this gives is fractional too, read between two DAC
+//   entries of the unrounded palette.
+void Pond::toTrueColor(uint32_t* out) const {
+    const uint8_t* tex = texture();
+    constexpr double kTexel = 1.0 / 16777216.0;   // the grid's u, v and light: 8.24
+    float lut[256 * 3];                           // the DAC in 0-255
+    for (int i = 0; i < 768; i++) lut[i] = dacF_[i] * (255.0f / 63.0f);
+    auto marble = [&](double u, double v) {
+        u -= 0.5, v -= 0.5;                       // texel centres
+        const double fu = std::floor(u), fv = std::floor(v);
+        const int x0 = (int)((int64_t)fu & 0xFF), y0 = (int)((int64_t)fv & 0xFF);
+        const int x1 = (x0 + 1) & 0xFF, y1 = (y0 + 1) & 0xFF;
+        const double au = u - fu, av = v - fv;
+        const double top = tex[y0 << 8 | x0] + (tex[y0 << 8 | x1] - tex[y0 << 8 | x0]) * au;
+        const double bot = tex[y1 << 8 | x0] + (tex[y1 << 8 | x1] - tex[y1 << 8 | x0]) * au;
+        return top + (bot - top) * av;
+    };
+    auto lit = [&](double j, double level) {
+        if (level < 64) {
+            // as lightTables(): f = e^(1.5 - (64 - L) / 13) - 0.02, at most 1
+            double f = std::exp(1.5 - (64 - level) * 0.07692307692307693) - 0.02;
+            f = std::min(f, 1.0);
+            return j * f + 128 * (1 - f);
+        }
+        if (level < 65) return j;
+        return j + std::min(level - 65, 64.0) * (255 - j) / 64;
+    };
+    for (int by = 0; by < 25; by++)
+        for (int bx = 0; bx < 40; bx++) {
+            const uint32_t p = kGrid + (uint32_t)(by * 41 + bx) * 12;
+            // the corners relative to the top left one (u and v wrap: their differences are what count)
+            double c[3][4];
+            for (int k = 0; k < 3; k++) {
+                const uint32_t a = r32(p + 4 * k);
+                c[k][0] = k == 2 ? (double)a : (double)(int32_t)a;
+                c[k][1] = c[k][0] + (int32_t)(r32(p + 12 + 4 * k) - a);
+                c[k][2] = c[k][0] + (int32_t)(r32(p + 0x1EC + 4 * k) - a);
+                c[k][3] = c[k][0] + (int32_t)(r32(p + 0x1F8 + 4 * k) - a);
+                for (double& v : c[k]) v *= kTexel;
+            }
+            for (int j = 0; j < 8; j++) {
+                const double fy = j / 8.0;
+                uint32_t* o = out + (by * 8 + j) * W + bx * 8;
+                for (int i = 0; i < 8; i++) {
+                    const double fx = i / 8.0;
+                    double q[3];
+                    for (int k = 0; k < 3; k++) {
+                        const double top = c[k][0] + (c[k][1] - c[k][0]) * fx;
+                        const double bot = c[k][2] + (c[k][3] - c[k][2]) * fx;
+                        q[k] = top + (bot - top) * fy;
+                    }
+                    const double idx = std::clamp(lit(marble(q[0], q[1]), std::clamp(q[2], 0.0, 129.0)), 0.0, 255.0);
+                    const int i0 = std::min((int)idx, 254);
+                    const float a = (float)(idx - i0);
+                    const float* e = lut + 3 * i0;
+                    auto ch = [&](int k) { return (uint32_t)std::clamp(std::lround(e[k] + (e[k + 3] - e[k]) * a), 0L, 255L); };
+                    o[i] = 0xFF000000u | ch(0) << 16 | ch(1) << 8 | ch(2);
+                }
+            }
+        }
 }
 
 }  // namespace pond

@@ -2,8 +2,6 @@
 // over this project's flat memory (Pond::mem_): the grid mapper (14DF4h)
 // with its variables at 1E500h moved to offsets 0-7Fh, the bubbles
 // (1CB2Bh), the wobbling plane (1CDF8h) and the grids' blend (150BEh).
-#include <cstring>
-
 #include "pond.h"
 
 namespace pond {
@@ -119,9 +117,7 @@ void Pond::blend(uint32_t dst, uint32_t a, uint32_t b, int32_t wa, int32_t wb) {
 // each pushes the points around it outwards (by sin of the distance inside
 // it), lit by its cosine.
 void Pond::bubbles(uint32_t grid, float t) {
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    auto Fl = [&](uint32_t a) { return (X)f32(a); };
-    F.fld(t), F.fmul(Fl(0x294C0));
+    F.fld(t), F.fmul(8.0f);
     const float r0 = F.fstpf();
     int32_t y1 = -12, y2 = -7, y3 = -9;
     uint32_t row = grid;
@@ -136,21 +132,21 @@ void Pond::bubbles(uint32_t grid, float t) {
                 F.fld((X)d2), F.fsqrt(), F.fsub(dr);
             };
             dist(x1 * x1 + y1 * y1);
-            F.fld(Fl(0x294C0)), F.fldst(0), F.fxch(2);
+            F.fld(8.0f), F.fldst(0), F.fxch(2);
             float a1 = F.fstpf();
-            F.fxch(), F.fsub(a1), F.fdivr(Fl(0x29590)), F.fmulp(1);
+            F.fxch(), F.fsub(a1), F.fdivr(2048.0f), F.fmulp(1);
             F.fldz(), F.fxch();
             float s1 = F.fstpf();
             if (F.fcomp(a1).jb()) s1 = 0, a1 = 0;
             float a[2], s[2];
             const int32_t d2[2] = {x2 * x2 + y2 * y2, x3 * x3 + y3 * y3};
-            const uint32_t off[2] = {0x29594, 0x2959C};
+            const double off[2] = {10.0, 18.0};
             for (int k = 0; k < 2; k++) {
                 dist(d2[k]);
-                F.fadd(D(off[k]));
-                F.fld(Fl(0x294C8)), F.fxch();
+                F.fadd(off[k]);
+                F.fld(4.0f), F.fxch();
                 a[k] = F.fstpf();
-                F.fsub(a[k]), F.fdivr(D(0x29534)), F.fmul(D(0x294CC));
+                F.fsub(a[k]), F.fdivr(2730.666666666666), F.fmul(4.0);
                 F.fldz(), F.fxch();
                 s[k] = F.fstpf();
                 if (F.fcomp(a[k]).jb()) s[k] = 0, a[k] = 0;
@@ -165,7 +161,7 @@ void Pond::bubbles(uint32_t grid, float t) {
             F.fsin();
             F.fld((X)x1), F.fmul(g1);
             F.fld((X)y1), F.fmul(g1);
-            F.fld(s1), F.fmul(Fl(0x294C4));
+            F.fld(s1), F.fmul(50.0f);
             F.fld(s3), F.fmulp(4);
             F.fld((X)gy), F.fld((X)gx);
             F.faddp(4), F.faddp(2);
@@ -181,13 +177,13 @@ void Pond::bubbles(uint32_t grid, float t) {
             w32(edx + 4, (uint32_t)F.fistp());
             float t2 = F.fstpf();
             cosPos(a1), F.fmul(t2);
-            F.fld(s2), F.fmul(Fl(0x294C4));
+            F.fld(s2), F.fmul(50.0f);
             F.fxch();
             float t7e = F.fstpf();
             t2 = F.fstpf();
             cosPos(a2), F.fmul(t2);
-            F.fld(s3), F.fmul(Fl(0x294C4));
-            F.fld(t7e), F.fadd(Fl(0x2958C));
+            F.fld(s3), F.fmul(50.0f);
+            F.fld(t7e), F.fadd(258048.0f);
             F.faddp(2);
             t7e = F.fstpf();
             t2 = F.fstpf();
@@ -205,25 +201,22 @@ void Pond::bubbles(uint32_t grid, float t) {
 // and twisting, a ring of light moving out from the centre; into the
 // second grid (+31F8h).
 void Pond::wobble(uint32_t grid, float t) {
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    auto Fl = [&](uint32_t a) { return (X)f32(a); };
-    auto bits = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
-    F.fld(t), F.fadd(Fl(0x2950C));
+    F.fld(t), F.fadd(-8.0f);
     const float u = F.fstf();
-    F.fmul(Fl(0x294D4));
+    F.fmul(0.1f);
     float k1 = F.fstf();
-    if (F.fcomp(D(0x294EC)).ja()) k1 = 0.5f;
-    F.fld(u), F.fadd(Fl(0x2953C)), F.fmul(Fl(0x294D8));
+    if (F.fcomp(0.5).ja()) k1 = 0.5f;
+    F.fld(u), F.fadd(-10.0f), F.fmul(0.05f);
     float k2 = F.fstf();
-    if (F.fcomp(D(0x295A4)).ja()) k2 = bits(0x3EA8F5C3);
+    if (F.fcomp(0.33).ja()) k2 = 0.33f;
     if (F.fldz(), F.fcomp(k2).ja()) k2 = 0;
-    F.fld(u), F.fadd(Fl(0x295AC)), F.fmul(Fl(0x294D8));
+    F.fld(u), F.fadd(-15.0f), F.fmul(0.05f);
     float k3 = F.fstf();
-    if (F.fcomp(D(0x2948C)).ja()) k3 = bits(0x3E4CCCCD);
+    if (F.fcomp(0.2).ja()) k3 = 0.2f;
     if (F.fldz(), F.fcomp(k3).ja()) k3 = 0;
-    F.fld(u), F.fldst(0), F.fmul(Fl(0x294C0));
-    F.fldst(1), F.fmul(Fl(0x29470));
-    F.fxch(2), F.fmul(Fl(0x294DC));
+    F.fld(u), F.fldst(0), F.fmul(8.0f);
+    F.fldst(1), F.fmul(0.5f);
+    F.fxch(2), F.fmul(0.33333334f);
     F.fxch();
     const float p = F.fstpf();
     F.fxch();
@@ -244,24 +237,24 @@ void Pond::wobble(uint32_t grid, float t) {
             F.fxch(), F.faddp(3), F.fmulp(3);
             F.fxch();
             float py = F.fstf();
-            F.fmul(Fl(0x294E0));
+            F.fmul(0.16666667f);
             F.fxch(2), F.fsubp(1);
             F.fxch(), F.fadd(u);
             F.fxch();
             float px = F.fstpf();
             F.fsin(), F.fmul(k1), F.fld1(), F.faddp(), F.fmul(px);
             px = F.fstf();
-            F.fmul(Fl(0x294A4)), F.fadd(ph), F.fsin(), F.fmul(k2), F.fld1(), F.faddp(), F.fmul(py);
+            F.fmul(0.25f), F.fadd(ph), F.fsin(), F.fmul(k2), F.fld1(), F.faddp(), F.fmul(py);
             py = F.fstf();
-            F.fmul(Fl(0x294DC)), F.fadd(q), F.fsin(), F.fmul(k3), F.fld1(), F.faddp();
+            F.fmul(0.33333334f), F.fadd(q), F.fsin(), F.fmul(k3), F.fld1(), F.faddp();
             F.fld(px), F.fxch(), F.fmulst(1);
-            F.fld(Fl(0x294C0));
+            F.fld(8.0f);
             F.fld(py), F.fmulst(1);
             F.fxch(2), F.fstp(3);
             F.fxch(2);
             px = F.fstf();
             F.fmulp(2);
-            F.fld(Fl(0x29460));
+            F.fld(4096.0f);
             F.fxch(), F.fmulst(1);
             F.fxch(2), F.fmulp(1);
             F.fxch(), F.frndint(), F.fxch(), F.frndint();
@@ -270,13 +263,13 @@ void Pond::wobble(uint32_t grid, float t) {
             F.fld(p);
             const double dp = F.fstpd();
             w32(edx + 0x3200, 0x3F000);
-            F.fld((X)(x * x + y * y)), F.fsqrt(), F.fsub(dp), F.fadd(D(0x29540));
+            F.fld((X)(x * x + y * y)), F.fsqrt(), F.fsub(dp), F.fadd(15.0);
             F.fldz(), F.fxch();
             const float z = F.fstpf();
             if (!F.fcomp(z).ja()) continue;
-            if (F.fld(z), !F.fcomp(D(0x295B0)).ja()) continue;
+            if (F.fld(z), !F.fcomp(-37.69911184307752).ja()) continue;   // -12 pi
             // inside the ring: pushed outwards
-            F.fld(z), F.fsin(), F.fmul(D(0x294E4));
+            F.fld(z), F.fsin(), F.fmul(4096.0);
             F.fld(px), F.fmulst(1);
             F.fld(py), F.fmulp(2);
             F.fld((X)(int32_t)r32(edx + 0x31F8));

@@ -1,9 +1,15 @@
-// The pond against the intro (tests/ref.txt): the texture and light tables,
-// then part 8's frames in order (T 0-17: the drops, the plane blending in),
-// each at the clock the intro read for it; the CRC32 of the screen, the DAC
-// and the grid compared.
+// The pond against the intro without its logo (tests/ref.txt): the marble
+// and the light tables, then part 8's frames in order (T 0-17: the drops,
+// the plane blending in), each at the clock the intro read for it; the CRC32
+// of the screen, the DAC and the grid compared. The reference is the port's
+// part 8 with its texture replaced by the marble the intro makes before
+// embossing the logo; its DAC and grid are the original's.
+// The 32-bit picture has no reference: every 10th frame, it is checked to
+// stay close to the 256-colour one (the mean difference per channel).
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <vector>
 
 #include "pond.h"
 
@@ -30,7 +36,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     auto p = std::make_unique<pond::Pond>();
-    int failures = 0, frames = 0, bad = 0;
+    int failures = 0, frames = 0, bad = 0, far = 0;
+    double worst = 0;
+    std::vector<uint32_t> a(pond::W * pond::H), b(pond::W * pond::H);
     char line[256];
     while (std::fgets(line, sizeof line, f)) {
         int n;
@@ -50,11 +58,23 @@ int main(int argc, char** argv) {
                                 clock, pond::Pond::partTime((int32_t)clock), gs, scr, gd, dac, gg, grid);
                 bad++;
             }
+            if (n % 10 == 0) {
+                p->toArgb(a.data());
+                p->toTrueColor(b.data());
+                long sum = 0;
+                for (int i = 0; i < pond::W * pond::H; i++)
+                    for (int k = 0; k < 24; k += 8) sum += std::abs((int)(a[i] >> k & 0xFF) - (int)(b[i] >> k & 0xFF));
+                const double d = sum / (3.0 * pond::W * pond::H);
+                if (d > worst) worst = d;
+                far += d > 16;
+            }
         }
     }
     std::fclose(f);
     std::printf("%d frames, %d differ\n", frames, bad);
-    failures += bad + (frames == 0);
+    std::printf("32-bit colour: at most %.2f from the 256 colours per channel, on average; %d frames too far\n", worst,
+                far);
+    failures += bad + far + (frames == 0);
     std::printf(failures ? "FAILED\n" : "all passed\n");
     return failures ? 1 : 0;
 }

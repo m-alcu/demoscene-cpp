@@ -6,7 +6,8 @@ texture is seen through water (the intro's "cubic team & $een" logo, embossed
 in it there, is left out). Drops fall into it, and their rings run outwards, pushing the
 picture aside and catching the light. In the intro this runs from 2:19.6
 (cells 2:20 and 2:25 of `rea/ctslasse-analisis/sheet.png`). The picture is
-320x200 with 256 colours, shown at 4:3.
+320x200, shown at 4:3, in 32-bit colour by default (**C** / `--256` shows
+the intro's 256 colours; see [32-bit colour](#32-bit-colour)).
 
 It is cut out of the [ctslasse](../ctslasse/) port. There are two modes:
 
@@ -16,15 +17,16 @@ It is cut out of the [ctslasse](../ctslasse/) port. There are two modes:
   picture.
 - **The intro, looped** (`--loop` / **L**): the part as the intro has it up
   to T 12 (8.2 s), translated routine by routine, with the order of every
-  x87 operation kept. **All its frames match the original's**: the screen,
-  the DAC and the grid (see Verification).
+  x87 operation kept. **All its frames match the original's** with the
+  marble in place of the logo texture: the screen, the DAC and the grid
+  (see Verification).
 
 ## Building and running
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j8
-./build/ctslasse-pond                     # [--loop] [--scale N]
+./build/ctslasse-pond                     # [--loop] [--256] [--scale N]
 ctest --test-dir build
 ```
 
@@ -33,13 +35,14 @@ ctest --test-dir build
 | **click** | a drop where clicked (endless) |
 | **D** | a drop somewhere (endless) |
 | **L** | switch between the endless pond and the intro, looped |
+| **C** | switch between 32-bit colour and the intro's 256 colours |
 | **R** | restart |
 | **Space** / **Esc** | pause / quit |
 
 Headless:
 
 ```bash
-ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop]
+ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256]
 ```
 
 This writes N frames, 70 a second, as `DIR/fNNNN.ppm`. The random drops
@@ -109,6 +112,30 @@ strength then fades out by 80 cells, and the drop is removed. Without this
 fade, the slow ripples left behind would jump when the drop disappeared.
 The light is clamped to the last table level.
 
+### 32-bit colour
+
+The grid holds u, v and the light in 8.24 fixed point, but the grid mapper
+keeps only whole texels and whole light levels, and the DAC has 6 bits per
+channel. `toTrueColor()` draws the same grid without these roundings:
+
+- In each 8x8 block, u, v and the light are interpolated bilinearly at the
+  mapper's pixel positions, with their fractions kept.
+- The marble is sampled bilinearly between its four nearest texels. It
+  wraps at 256, as the mapper's byte does.
+- The light uses the tables' formula at the fractional level: below 64,
+  `J·f + 128(1 − f)`; from 65, towards white by (L − 65)/64. Between 64
+  and 65 the texel is left as it is, which both tables also give there.
+- The palette index this gives is fractional too. The colour is read
+  between two entries of the palettes, which are computed as the intro's
+  gradients but without the integer division. The fades use the intro's
+  own steps (64 per fade).
+
+The picture is the same, without the steps between texels and levels, and
+without the banding of the 6-bit gradients. The palettes are curves, so a
+frame still holds only a few hundred colours, but they change smoothly.
+The few stray green pixels of the 256-colour picture in the endless pond
+do not appear.
+
 ### Floating point
 
 As in the port: the x87 at 80 bits, with the transcendentals computed as
@@ -117,17 +144,33 @@ the harness's CPU (QEMU) computes them (`src/x87.h`). Build with
 
 ## Verification
 
-`tests/ref.txt` is the ctslasse port's part 8, logged after each frame. It
-was logged from a scratch copy of the port with one print added; the copy
+`tests/ref.txt` is the ctslasse port's part 8, logged after each frame,
+without the logo. It was logged from a scratch copy of the port; the copy
 is not kept. The port matches the original under `rea/ctslasse-analisis` on
-every frame. The reference holds:
+every frame. The copy has two changes:
 
-- the CRC32 of the texture and of the light tables;
+- a print after each frame;
+- the part's texture replaced by the marble. This is the tile the intro's
+  precalculation holds just before it embosses the logo: T+10000h after its
+  third displacement.
+
+Nothing else changes in the copy. Its DAC and grid are the same as those
+of the unmodified port, frame for frame, because they do not depend on the
+texture. The reference holds:
+
+- the CRC32 of the marble and of the light tables;
 - for the first 831 frames (T 0-17.4: the drops, the plane blending in and
   then alone), the clock the intro read and the CRC32 of the screen, of the
   DAC and of the grid.
 
 The test draws each frame at its clock and compares. Everything matches.
+So the picture is exactly what the intro would draw with the marble in
+place of its logo texture.
+
+The 32-bit picture has no reference. Every tenth frame of the test, it is
+compared with the 256-colour one, and the mean difference per channel
+must stay under 16 (it reaches about 11, in the plane's red and yellow
+palette, whose sharp steps the filtering softens).
 
 The endless pond is not checked against anything, since the intro has no
 such mode.

@@ -2,17 +2,18 @@
 // the start of part 8: drops falling in water over a marble, in
 // C++17 / SDL3.
 //
-// Usage: ctslasse-pond [--loop] [--scale N]
+// Usage: ctslasse-pond [--loop] [--256] [--scale N]
 //            keys / mouse: click a drop where clicked, D a drop somewhere,
-//                  L the endless pond / the intro looped, R restart,
-//                  Space pause, Esc quit
-//        ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop]
+//                  L the endless pond / the intro looped, C 32-bit colour /
+//                  the intro's 256 colours, R restart, Space pause, Esc quit
+//        ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256]
 //            (no window: writes N frames, 70 per second, as DIR/fNNNN.ppm)
 //
 // Endless (the default): the intro's three drops, then more falling at
 // random, every 1-2.7 s, with the intro's ring for each. --loop / L: the
 // intro's own timeline, exact: the three drops, then from T 8 (5.5 s) the
 // palette turning red and the plane's waves blending in, until T 12 (8.2 s).
+// Shown in 32-bit colour (the default) or as the intro has it, in 256.
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -71,11 +72,16 @@ void draw(pond::Pond& p, Water& w, double seconds, bool loop) {
     }
 }
 
-int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double start, bool loop) {
+void picture(const pond::Pond& p, bool trueColor, uint32_t* argb) {
+    if (trueColor) p.toTrueColor(argb);
+    else p.toArgb(argb);
+}
+
+int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double start, bool loop, bool trueColor) {
     std::vector<uint32_t> argb(pond::W * pond::H);
     for (int f = 0; f < frames; f++) {
         draw(p, w, start + f / 70.0, loop);
-        p.toArgb(argb.data());
+        picture(p, trueColor, argb.data());
         char path[1024];
         std::snprintf(path, sizeof path, "%s/f%04d.ppm", dir.c_str(), f);
         FILE* g = std::fopen(path, "wb");
@@ -99,7 +105,7 @@ int main(int argc, char** argv) {
     std::string dumpDir;
     int scale = 3, frames = 70;
     double start = 0;
-    bool loop = false;
+    bool loop = false, trueColor = true;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--scale" && i + 1 < argc) scale = std::max(1, std::atoi(argv[++i]));
@@ -107,8 +113,9 @@ int main(int argc, char** argv) {
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (a == "--start" && i + 1 < argc) start = std::max(0.0, std::atof(argv[++i]));
         else if (a == "--loop") loop = true;
+        else if (a == "--256") trueColor = false;
         else {
-            std::fprintf(stderr, "usage: ctslasse-pond [--loop] [--scale N] | --dump DIR [--frames N] [--start S] [--loop]\n");
+            std::fprintf(stderr, "usage: ctslasse-pond [--loop] [--256] [--scale N] | --dump DIR [--frames N] [--start S] [--loop] [--256]\n");
             return 1;
         }
     }
@@ -117,7 +124,7 @@ int main(int argc, char** argv) {
     if (!dumpDir.empty()) {
         // the random drops up to START, as a window would have had them
         if (!loop) water.update((float)partT(start));
-        return dump(*p, water, dumpDir, frames, start, loop);
+        return dump(*p, water, dumpDir, frames, start, loop, trueColor);
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -127,7 +134,9 @@ int main(int argc, char** argv) {
     // 320x200 shown at 4:3, as on a VGA monitor in mode 13h
     SDL_Window* win = SDL_CreateWindow("ctslasse-pond", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
     auto setTitle = [&] {
-        SDL_SetWindowTitle(win, loop ? "ctslasse-pond - the intro, looped" : "ctslasse-pond - endless (click: a drop)");
+        std::string title = loop ? "ctslasse-pond - the intro, looped" : "ctslasse-pond - endless (click: a drop)";
+        title += trueColor ? " - 32-bit" : " - 256 colours";
+        SDL_SetWindowTitle(win, title.c_str());
     };
     setTitle();
     SDL_Renderer* ren = SDL_CreateRenderer(win, nullptr);
@@ -163,6 +172,10 @@ int main(int argc, char** argv) {
             case SDL_SCANCODE_D:
                 if (!loop) water.randomDrop((float)partT(t));
                 break;
+            case SDL_SCANCODE_C:
+                trueColor = !trueColor;
+                setTitle();
+                break;
             case SDL_SCANCODE_L:
                 loop = !loop;
                 restart();
@@ -182,7 +195,7 @@ int main(int argc, char** argv) {
             t = 60;
         }
         draw(*p, water, t, loop);
-        p->toArgb(argb.data());
+        picture(*p, trueColor, argb.data());
         SDL_UpdateTexture(tex, nullptr, argb.data(), pond::W * 4);
         SDL_RenderClear(ren);
         SDL_RenderTexture(ren, tex, nullptr, nullptr);
