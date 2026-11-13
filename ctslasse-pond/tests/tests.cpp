@@ -14,16 +14,37 @@
 #include "pond.h"
 
 namespace {
+// The standard CRC-32 (as zlib, PNG and `cksum -a crc32b` compute it).
+//
+// Why a CRC: the reference cannot hold the frames themselves (831 screens
+// of 64000 bytes, plus the DAC and the grid for each). It holds a 32-bit
+// fingerprint of each buffer instead, logged from the port. Any change to a
+// buffer, even one bit of one pixel, changes its CRC (a wrong match is a
+// 1 in 4 billion chance), so equal CRCs mean equal buffers. It has to be
+// this exact CRC-32, as it is the one the reference was logged with.
 uint32_t crc32(const uint8_t* p, size_t n) {
+    // The table: for each byte value, the remainder of its 8 bits divided
+    // by the polynomial (0xEDB88320: the bits of CRC-32's polynomial,
+    // reversed, as the bytes are taken low bit first). Built on first use.
     static uint32_t table[256];
     if (!table[1])
         for (uint32_t i = 0; i < 256; i++) {
             uint32_t k = i;
+            // a bit at a time: shift out the low bit, and when it was 1
+            // subtract (XOR) the polynomial. 0u - (k & 1) is all ones when
+            // the bit is 1 and 0 when it is 0: a mask instead of an if.
             for (int j = 0; j < 8; j++) k = (k >> 1) ^ (0xEDB88320u & (0u - (k & 1)));
             table[i] = k;
         }
+    // The register starts at all ones (~0u = 0xFFFFFFFF), so leading zero
+    // bytes change the result too (from 0 they would leave it 0).
     uint32_t c = ~0u;
+    // a byte at a time: the byte meets the register's low byte, the table
+    // gives the remainder for those 8 bits, and the rest of the register
+    // moves down a byte
     while (n--) c = (c >> 8) ^ table[(c ^ *p++) & 0xFF];
+    // Inverted at the end (~ flips every bit), as the standard asks: this
+    // is what gives the usual values (CRC-32 of "123456789" is cbf43926).
     return ~c;
 }
 }  // namespace
