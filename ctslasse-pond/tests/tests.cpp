@@ -1,14 +1,16 @@
 // The pond against the intro without its logo (tests/ref.txt): the marble
-// and the light tables, then part 8's frames in order (T 0-17: the drops,
-// the plane blending in), each at the clock the intro read for it; the CRC32
-// of the screen, the DAC and the grid compared. The reference is the port's
+// and the light table, then part 8's frames in order up to T 8 (the drops;
+// the reference goes on to effects not kept here), each at the clock the
+// intro read for it; the CRC32 of the screen, the DAC and the grid compared. The reference is the port's
 // part 8 with its texture replaced by the marble the intro makes before
 // embossing the logo; its DAC and grid are the original's.
 // The 32-bit picture has no reference: every 10th frame, it is checked to
 // stay close to the 256-colour one (the mean difference per channel). The
 // 512x512 marble is checked to have the 256 one's shapes.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -48,6 +50,22 @@ uint32_t crc32(const uint8_t* p, size_t n) {
     // is what gives the usual values (CRC-32 of "123456789" is cbf43926).
     return ~c;
 }
+// The intro's whole light table, 130 rows: the shading rows 0-64 (J f +
+// 128 (1 - f), f = e^(1.5 - (64 - L) / 13) - 0.02 at most 1) and the
+// highlight rows 65-129. The pond keeps rows 65-129; this checks them
+// against the reference's CRC, which covers all 130.
+std::vector<uint8_t> introLightTable() {
+    std::vector<uint8_t> t(130 * 256);
+    for (int32_t row = 0; row <= 0x40; row++) {
+        float f = (float)(std::exp(1.5 - pond::X(0x40 - row) * 0.07692307692307693) + -0.02);
+        if (1 < f) f = 1.0f;
+        for (int32_t j = 0; j < 0x100; j++) {
+            t[row * 0x100 + j] = (uint8_t)std::lrint(pond::X(j) * f + (1 - pond::X(f)) * 128.0f);
+            t[(65 + row) * 0x100 + j] = (uint8_t)((0xFF - j) * row / 64 + j);
+        }
+    }
+    return t;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -66,11 +84,14 @@ int main(int argc, char** argv) {
         int n;
         unsigned clock, scr, dac, grid, tex, light;
         if (std::sscanf(line, "tex %x %x", &tex, &light) == 2) {
-            const uint32_t gt = crc32(p->texture(), 0x10000), gl = crc32(p->lightTable(), 0x8200);
-            std::printf("texture %08x %s, light %08x %s\n", gt, gt == tex ? "ok" : "MISMATCH", gl,
-                        gl == light ? "ok" : "MISMATCH");
-            failures += (gt != tex) + (gl != light);
+            const std::vector<uint8_t> intro = introLightTable();
+            const uint32_t gt = crc32(p->texture(), 0x10000), gl = crc32(intro.data(), 0x8200);
+            const bool rows = !std::memcmp(p->lightTable(), intro.data() + pond::kHighlight * 256, pond::kRows * 256);
+            std::printf("texture %08x %s, light %08x %s, the pond's rows %s\n", gt, gt == tex ? "ok" : "MISMATCH", gl,
+                        gl == light ? "ok" : "MISMATCH", rows ? "ok" : "MISMATCH");
+            failures += (gt != tex) + (gl != light) + !rows;
         } else if (std::sscanf(line, "frame %d %u %x %x %x", &n, &clock, &scr, &dac, &grid) == 5) {
+            if (pond::Pond::partTime((int32_t)clock) >= pond::kIntroEnd) break;
             p->frame((int32_t)clock);
             const uint32_t gs = crc32(p->screen(), 64000), gd = crc32(p->dac(), 768), gg = crc32(p->grid(), 0x31F8);
             frames++;

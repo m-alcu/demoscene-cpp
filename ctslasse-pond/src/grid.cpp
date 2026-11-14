@@ -1,11 +1,11 @@
-// Part 8's grid routines: the grid mapper, the blend of the two grids, the
-// drops and the wobbling plane.
+// Part 8's grid routines for the pond: the grid mapper and the drops.
 //
 // They give the intro's results bit for bit (tests/ref.txt). The floating
 // point is the x87's (see X in pond.h): each expression is evaluated in long
 // double, in the intro's order, and rounded to float or double where the
 // intro stores a value, or to the nearest integer (lrint) where it does
 // FRNDINT/FISTP.
+#include <algorithm>
 #include <cmath>
 
 #include "pond.h"
@@ -25,8 +25,9 @@ float cosPos(float a) {
 // The grid over 40x25 blocks of 8x8 pixels. In each block, u, v
 // and the light level are interpolated bilinearly from the four corners:
 // down the left edge row by row, then across each row pixel by pixel. A
-// pixel is light[level][tex[v][u]], each taken at its whole part, modulo
-// 256: the texture wraps at 256 texels, and the level too.
+// pixel is light[S][tex[v][u]], each taken at its whole part: the texture
+// wraps at 256 texels, and S = level - 65 is the table's row (under 65,
+// the light at rest: row 0, the texel as it is).
 //
 // In texels and levels, as doubles. The intro's mapper works to 1/65536:
 // the corners are cut down to that, and so are the steps (each a corner's
@@ -67,24 +68,14 @@ void Pond::gridMap() {
             for (int y = 0; y < 8; y++, row += W) {
                 Uvl q = left;
                 for (int x = 0; x < 8; x++) {
-                    row[x] = light[whole(q.l) << 8 | tex[whole(q.v) << 8 | whole(q.u)]];
+                    const int s = std::clamp(whole(q.l) - kHighlight, 0, kSteps);
+                    row[x] = light[s << 8 | tex[whole(q.v) << 8 | whole(q.u)]];
                     q += across;
                 }
                 left += down;
                 across += turn;
             }
         }
-}
-
-// The grid = the grid · A + the plane · B (A + B = 4096), in 32 bits
-void Pond::blend(int32_t a, int32_t b) {
-    for (size_t i = 0; i < grid_.size(); i++) {
-        Point& g = grid_[i];
-        const Point& p = plane_[i];
-        g.u = g.u * (uint32_t)a + p.u * (uint32_t)b;
-        g.v = g.v * (uint32_t)a + p.v * (uint32_t)b;
-        g.light = g.light * (uint32_t)a + p.light * (uint32_t)b;
-    }
 }
 
 // The intro's three drops, into the grid. Each is a ring whose
@@ -129,50 +120,6 @@ void Pond::bubbles(float t) {
             const X light = X(cosPos(r3.a)) * (float)(X(r3.s) * 50.0f) + l12;
             grid_[gy * kGridW + gx] = {(uint32_t)std::lrint(u), (uint32_t)std::lrint(v),
                                        (uint32_t)std::lrint(light)};
-        }
-}
-
-// The plane, into the second grid, from T 8 (U = T - 8). Each
-// point (x, y), from the centre, is turned by PH = U/2 (the intro's x and y
-// terms are offset: x + 16 and x + 24, y + 8 and y + 16), then waved by
-// three sines, each on the coordinate the one before left, with strengths
-// K1-K3 growing with U up to 0.5, 0.33 and 0.2. It is scaled to 16.16 (a
-// cell is 8 texels). A ring (radius 8U - 15) pushes the points inside it
-// outwards, by sin of the distance into it, up to 12 pi behind its front.
-void Pond::wobble(float t) {
-    const X tu = X(t) - 8.0f;
-    const float u = (float)tu;
-    const X k1x = tu * X(0.1f), k2x = (X(u) - 10.0f) * X(0.05f), k3x = (X(u) - 15.0f) * X(0.05f);
-    float k1 = (float)k1x, k2 = (float)k2x, k3 = (float)k3x;
-    if (k1x > 0.5) k1 = 0.5f;
-    if (k2x > 0.33) k2 = 0.33f;
-    if (0 > k2) k2 = 0;
-    if (k3x > 0.2) k3 = 0.2f;
-    if (0 > k3) k3 = 0;
-    const float radius = (float)(X(u) * 8.0f);
-    const float ph = (float)(X(u) * 0.5f);
-    const float q = (float)(X(u) * 0.33333334f);
-    const float cph = (float)std::cos(X(ph));
-    const X sph = std::sin(X(ph));
-    for (int y = -12; y <= 13; y++)
-        for (int x = -20; x <= 20; x++) {
-            const int xs = x + 16, ys = y + 8, xc = x + 24, yc = y + 16;
-            const X ty = X(ys) * cph + X(xs) * sph;
-            const X tx = X(xc) * cph - sph * X(yc);
-            const X wx = (std::sin(ty * 0.16666667f + u) * k1 + 1) * (float)tx;
-            const X wy = (std::sin(wx * 0.25f + ph) * k2 + 1) * (float)ty;
-            const X wx2 = (std::sin(wy * 0.33333334f + q) * k3 + 1) * (float)wx;
-            const float px = (float)wx2, py = (float)wy;
-            int32_t pu = (int32_t)std::lrint(wx2 * 8.0f * 4096.0f);
-            int32_t pv = (int32_t)std::lrint(X(py) * 8.0f * 4096.0f);
-            // the ring
-            const float z = (float)(std::sqrt(X(x * x + y * y)) - X(radius) + 15.0);
-            if (0 > z && z > -37.69911184307752) {   // -12 pi
-                const X w = std::sin(X(z)) * 4096.0;
-                const X ru = px * w + X(pu), rv = w * py + X(pv);
-                pu = (int32_t)std::lrint(ru), pv = (int32_t)std::lrint(rv);
-            }
-            plane_[(y + 12) * kGridW + x + 20] = {(uint32_t)pu, (uint32_t)pv, 0x3F000};
         }
 }
 

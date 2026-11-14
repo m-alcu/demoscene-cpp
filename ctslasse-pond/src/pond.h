@@ -7,14 +7,13 @@
 // drawn by the intro's grid mapper in 8x8 blocks over 320x200. Two ways to
 // move the grid:
 //
-//   frame(clock)  the intro, exactly: its three drops, and from
-//                 T 8 its wobbling plane blending in, with its
-//                 palettes. Translated from the ctslasse port routine by
-//                 routine, x87 order kept; matches the original
-//                 (tests/ref.txt).
-//   pondFrame(t)  the same water, endless: the intro's ring formula for any
-//                 number of drops, falling at random or where asked (not
-//                 the original's picture).
+//   pondFrame(t)  the pond: the intro's ring formula for any number of
+//                 drops, falling at random or where asked.
+//   frame(clock)  the intro's own three drops, exactly, up to T 8 (where
+//                 the intro goes on to other effects, not kept here).
+//                 Translated from the ctslasse port routine by routine, x87
+//                 order kept; matches the original (tests/ref.txt). Only the
+//                 test uses it.
 #pragma once
 
 #include <array>
@@ -36,7 +35,12 @@ constexpr int W = 320, H = 200;
 constexpr int kGridW = 41, kGridH = 26;      // the grid's points: one per 8x8 block's corner
 constexpr double kPit = 1193182.0;
 constexpr double kUnit = 813440.2376280001;   // the part's time unit in PIT ticks (about 0.68 s)
-constexpr float kIntroEnd = 12.0f;            // T: the plane alone from here; the drops are gone
+constexpr float kIntroEnd = 8.0f;             // T: the intro's drops alone up to here
+// The light: 63 at rest (and up to 65, the texel as it is), then 64 steps
+// towards white (S = level - 65: 0-64, white at 129). The table has a row
+// per step; 64 = 2^6, so S / 64 is a shift.
+constexpr int kRest = 63, kHighlight = 65, kShift = 6, kSteps = 1 << kShift, kTop = kHighlight + kSteps,
+              kRows = kSteps + 1;
 
 // A drop in the pond: where (grid cells, 0-40 across, 0-25 down) and when
 // (T) it fell. The ring's radius is 8 cells per T.
@@ -48,8 +52,8 @@ struct Drop {
 class Pond {
 public:
     Pond();
-    // The intro at CLOCK (PIT ticks since the part began): the grid, the
-    // picture and the DAC as the intro has them.
+    // The intro at CLOCK (PIT ticks since the part began, up to T 8): the
+    // grid, the picture and the DAC as the intro has them.
     void frame(int32_t clock);
     static float partTime(int32_t clock) { return (float)((double)clock / kUnit); }
 
@@ -65,9 +69,12 @@ public:
     static bool dropDone(const Drop& d, float t);
 
     const uint8_t* screen() const { return screen_.data(); }   // 320x200
-    const uint8_t* dac() const { return dac_; }                // 256 RGB, 6-bit
+    const uint8_t* dac() const { return dac_; }                // 256 RGB, 6-bit, as the intro writes it
+    // the DAC as shown: the same, but 64 (which a 6-bit DAC wraps to 0) kept at 63
+    const uint8_t* shownDac() const { return shown_; }
     const uint8_t* texture() const { return tex_.data(); }     // 256x256, the marble
-    const uint8_t* lightTable() const { return light_.data(); } // 130 x 256 (the rest zero)
+    // the light table: kRows rows (S = level - 65, 0-64) of 256 texels
+    const uint8_t* lightTable() const { return light_.data(); }
     // the grid as the intro holds it: 41 x 26 x (u, v, light), 3198 dwords
     const uint8_t* grid() const { return reinterpret_cast<const uint8_t*>(grid_.data()); }
     // the picture in 256 colours, as the intro shows it (the screen through the DAC)
@@ -87,8 +94,8 @@ public:
 
 private:
     // A point of the grid: the texture's u and v (texels) and the light
-    // level, in 8.24 fixed point. The drops and the plane leave them in
-    // 16.16; the blend multiplies by 4096.
+    // level, in 8.24 fixed point. The drops leave them in 16.16, and they
+    // are then multiplied by 4096.
     struct Point {
         uint32_t u, v, light;
     };
@@ -96,7 +103,7 @@ private:
     using Grid = std::array<Point, kGridW * kGridH>;
 
     void precalc();                 // the texture, as the intro's precalculation makes it
-    void lightTables();             // part 8's set-up
+    void makeLightTable();          // the light table
     void precalc512();              // the marble at 512x512 (32-bit picture)
     static void gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                          int32_t n);
@@ -107,15 +114,15 @@ private:
 
     // grid.cpp: the intro's routines
     void gridMap();                     // the grid onto the screen
-    void blend(int32_t a, int32_t b);   // the grid = grid · A + plane · B
     void bubbles(float t);              // the three drops, into the grid
-    void wobble(float t);               // the plane, into the plane's grid
 
-    // the DAC
-    void setDac(int src, int32_t k0, int mix, int mode);   // palettes by number: 1-3
-    void copyDac(int src);
+    // the palettes and the DAC
+    enum { kBlue, kGrey };              // black - blue - white, black - white
+    void fromWhite(int32_t k);          // grey from white (K 0: white, 64: grey)
+    void toBlue(int32_t k);             // grey to blue (K 0: grey, 64: blue)
+    void blue();                        // the blue palette as it is
 
-    Grid grid_{}, plane_{};                 // the drops' grid (shown), the plane's
+    Grid grid_{};
     // The water the 32-bit picture is drawn from: u and v (texels) and the
     // light level at NX x NY points, CX and CY pixels apart (of 320x200), the
     // first at (OX, OY).
@@ -126,14 +133,12 @@ private:
     };
     Field field_;
     void fieldFromGrid();                   // the field at the grid's points
-    std::vector<float> litA_, litB_;        // the light at level L: texel J goes to J A + B, per 1/256 level
-    // the texture and the light tables (64K each: the mapper's levels wrap
-    // at 256), the screen
+    // the texture, the light table, the screen
     std::vector<uint8_t> tex_, light_, screen_;
     std::vector<uint8_t> tex512_;           // the 512x512 marble, once asked for
     int marble_ = 256;
-    uint8_t pal_[4][768], dac_[768];        // pal_[1-3]: the intro's three palettes (0 unused)
-    float palF_[4][768], dacF_[768];        // the same, unrounded (6-bit scale, 0-63)
+    uint8_t pal_[2][768], dac_[768], shown_[768];
+    float palF_[2][768], dacF_[768];        // the same, unrounded (6-bit scale, 0-63)
     bool dacSet_ = false;           // the palette written (else a start past the fades stays white)
 };
 

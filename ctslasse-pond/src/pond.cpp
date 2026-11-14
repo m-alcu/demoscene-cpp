@@ -1,5 +1,5 @@
-// The texture, the light tables and the palettes, the intro's frame (part
-// 8, up to the tunnel at T 33) and the endless pond.
+// The texture, the light table and the palettes, the intro's drops (part
+// 8 up to T 8) and the endless pond.
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -143,22 +143,13 @@ void Pond::setMarble(int size) {
     if (marble_ == 512 && tex512_.empty()) precalc512();
 }
 
-// Part 8's light tables, 65 levels of 256: level L maps a texel J
-// to J f + 128 (1 - f), f = e^(L/13 - 1.5) - 0.02 at most 1: low levels
-// greyed. Then 65 more (+4100h) for the highlights: J + row (255 - J) / 64,
-// towards white.
-void Pond::lightTables() {
-    for (int32_t row = 0; row <= 0x40; row++) {
-        const int32_t lvl = 0x40 - row;
-        // (the intro computes e^ as Watcom does, through FPREM, F2XM1 and
-        // FSCALE; std::exp gives the same float)
-        float f = (float)(std::exp(1.5 - X(lvl) * 0.07692307692307693) + -0.02);   // 1/13
-        if (1 < f) f = 1.0f;
-        for (int32_t j = 0; j < 0x100; j++) {
-            light_[row * 0x100 + j] = (uint8_t)std::lrint(X(j) * f + (1 - X(f)) * 128.0f);
-            light_[0x4100 + row * 0x100 + j] = (uint8_t)((0xFF - j) * row / 64 + j);
-        }
-    }
+// The light table, a row per step S = level - 65 (0-64): the texel J goes
+// to J + (255 - J) S / 64 towards white (S 0: J as it is, 64: white). These
+// are the intro's rows 65-129; its table also has shading rows under 65,
+// which the pond never needs.
+void Pond::makeLightTable() {
+    for (int32_t s = 0; s < kRows; s++)
+        for (int32_t j = 0; j < 0x100; j++) light_[s * 0x100 + j] = (uint8_t)(j + ((0xFF - j) * s >> kShift));
 }
 
 void Pond::gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1, int32_t n) {
@@ -181,73 +172,59 @@ void Pond::gradient(float* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, 
     }
 }
 
-// pal1: green-grey - purple - light blue - black - red - yellow;
-// pal2: black - blue - white; pal3: black - white. Each also unrounded.
+// The pond's palettes, each also unrounded: blue (the intro's pal2), black -
+// blue - white; grey (pal3), black - white. Blue's middle is 40h, one over
+// the 6-bit DAC's 3Fh: index 128 gets blue 64, which the VGA wraps to 0 (an
+// olive green). dac_ keeps the intro's bytes; shown_ and the picture hold it
+// at 63, blue as the ramp means.
 void Pond::palettes() {
     auto both = [&](int pal, int at, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                     int32_t n) {
         gradient(pal_[pal] + at, r0, g0, b0, r1, g1, b1, n);
         gradient(palF_[pal] + at, r0, g0, b0, r1, g1, b1, n);
     };
-    both(1, 0x000, 5, 8, 1, 6, 3, 0x1E, 0x40);
-    both(1, 0x0C0, 6, 3, 0x1E, 0x0A, 0x23, 0x3C, 0x40);
-    both(1, 0x180, 0x0A, 0x23, 0x3C, 0, 0, 0, 0x40);
-    both(1, 0x240, 0, 0, 0, 0x3F, 0, 0, 0x20);
-    both(1, 0x2A0, 0x3F, 0, 0, 0x3F, 0x3F, 0, 0x20);
-    both(3, 0, 0, 0, 0, 0x3F, 0x3F, 0x3F, 0x100);
-    both(2, 0, 0, 0, 0, 0x10, 0x20, 0x40, 0x80);
-    both(2, 0x180, 0x10, 0x20, 0x40, 0x3F, 0x3F, 0x3F, 0x80);
+    both(kGrey, 0, 0, 0, 0, 0x3F, 0x3F, 0x3F, 0x100);
+    both(kBlue, 0, 0, 0, 0, 0x10, 0x20, 0x40, 0x80);
+    both(kBlue, 0x180, 0x10, 0x20, 0x40, 0x3F, 0x3F, 0x3F, 0x80);
 }
 
-Pond::Pond() : tex_(0x10000), light_(0x10000), screen_(W * H) {
+Pond::Pond() : tex_(0x10000), light_(kRows * 0x100), screen_(W * H) {
     precalc();
-    lightTables();
+    makeLightTable();
     palettes();
     std::memset(dac_, 0x3F, sizeof dac_);  // the part before ends in white
+    std::memset(shown_, 0x3F, sizeof shown_);
     std::fill(dacF_, dacF_ + 768, 63.0f);
-    // the 32-bit picture's light, as J A + B, levels 0-129 by 1/256
-    for (int n = 0; n <= 129 * 256; n++) {
-        const double level = n / 256.0;
-        double a = 1, b = 0;
-        if (level < 64) {
-            // as lightTables(): f = e^(1.5 - (64 - L) / 13) - 0.02, at most 1
-            a = std::min(std::exp(1.5 - (64 - level) * 0.07692307692307693) - 0.02, 1.0);
-            b = 128 * (1 - a);
-        } else if (level >= 65) {
-            const double up = (level - 65) / 64;   // J + up (255 - J)
-            a = 1 - up, b = 255 * up;
-        }
-        litA_.push_back((float)a), litB_.push_back((float)b);
-    }
     fieldFromGrid();
 }
 
-// The DAC: MODE 0 SRC towards white (K 0: white, 64: SRC), 1 SRC and MIX
-// mixed (K 0: MIX, 64: SRC), 2 SRC faded (K 0: black). The unrounded DAC
-// alongside.
-void Pond::setDac(int srcPal, int32_t k, int mixPal, int mode) {
-    const uint8_t *src = pal_[srcPal], *mix = pal_[mixPal];
+// The DAC, as the intro sets it (dac_, the 6-bit DAC keeping the low 6
+// bits), as shown (shown_, held at 63) and unrounded (dacF_).
+void Pond::fromWhite(int32_t k) {
+    const uint8_t* src = pal_[kGrey];
     for (int i = 0; i < 768; i++) {
-        int32_t v;
-        if (mode == 0) v = ((int32_t)src[i] * k + 0xFC0 - k * 0x3F) >> 6;
-        else if (mode == 1) v = ((int32_t)mix[i] * (0x40 - k) + (int32_t)src[i] * k) >> 6;
-        else v = ((int32_t)src[i] * k) >> 6;
-        dac_[i] = (uint8_t)(v & 0x3F);
+        const int32_t v = ((int32_t)src[i] * k + 0xFC0 - k * 0x3F) >> 6;
+        dac_[i] = (uint8_t)(v & 0x3F), shown_[i] = (uint8_t)std::min(v, 0x3F);
     }
     const float kf = std::clamp(k, 0, 64) / 64.0f;
-    const float *sf = palF_[srcPal], *mf = palF_[mixPal];
-    for (int i = 0; i < 768; i++) {
-        float v;
-        if (mode == 0) v = sf[i] * kf + 63 * (1 - kf);
-        else if (mode == 1) v = mf[i] * (1 - kf) + sf[i] * kf;
-        else v = sf[i] * kf;
-        dacF_[i] = std::clamp(v, 0.0f, 63.0f);
-    }
+    for (int i = 0; i < 768; i++) dacF_[i] = std::clamp(palF_[kGrey][i] * kf + 63 * (1 - kf), 0.0f, 63.0f);
 }
 
-void Pond::copyDac(int pal) {
-    std::memcpy(dac_, pal_[pal], sizeof dac_);
-    std::memcpy(dacF_, palF_[pal], sizeof dacF_);
+void Pond::toBlue(int32_t k) {
+    const uint8_t *src = pal_[kBlue], *mix = pal_[kGrey];
+    for (int i = 0; i < 768; i++) {
+        const int32_t v = ((int32_t)mix[i] * (0x40 - k) + (int32_t)src[i] * k) >> 6;
+        dac_[i] = (uint8_t)(v & 0x3F), shown_[i] = (uint8_t)std::min(v, 0x3F);
+    }
+    const float kf = std::clamp(k, 0, 64) / 64.0f;
+    for (int i = 0; i < 768; i++)
+        dacF_[i] = std::clamp(palF_[kGrey][i] * (1 - kf) + palF_[kBlue][i] * kf, 0.0f, 63.0f);
+}
+
+void Pond::blue() {
+    std::memcpy(dac_, pal_[kBlue], sizeof dac_);
+    for (int i = 0; i < 768; i++) shown_[i] = std::min(pal_[kBlue][i], (uint8_t)0x3F);
+    for (int i = 0; i < 768; i++) dacF_[i] = std::min(palF_[kBlue][i], 63.0f);
 }
 
 // --- the intro's frame ------------------------------------------------------------------------
@@ -256,32 +233,20 @@ void Pond::frame(int32_t clock) {
     const X t = X(clock) / kUnit;
     const float T = (float)t;
     const double dT = (double)t;
-    // the palettes: in from white over T 0-0.5 (black-white), to black-blue-
-    // white over 0.5-1.5, to pal1 over 8-12, out over 68-72
+    // the palette: in from white over T 0-0.5 (as greys), to blue over
+    // 0.5-1.5; then the intro leaves the DAC as it is
     if (t < 0.5) {
-        setDac(3, std::lrint(X(T) * 2.0f * 64.0f), 0, 0);
+        fromWhite(std::lrint(X(T) * 2.0f * 64.0f));
     } else if (dT < 1.5) {
-        setDac(2, std::lrint((X(dT) - 0.5) * 64.0), 3, 1);
+        toBlue(std::lrint((X(dT) - 0.5) * 64.0));
     } else if (!dacSet_) {
         // started past the fade-in (never in the intro): the palette in full
-        copyDac(2);
+        blue();
     }
     dacSet_ = true;
-    if (T > 8 && T < 12) setDac(1, std::lrint((X(T) - 8.0f) * 16.0f), 2, 1);
-    if (T > 68) setDac(1, std::lrint((72.0f - X(T)) * 16.0f), 0, 2);
-    // the drops until T 12, the plane from T 8 (the tunnel from T 33 is not here)
-    if (T < 12) bubbles(T);
-    if (T > 8 && T < 38) wobble(T);
-    // grid = grid a + plane b, b rising over T 8-12 as (1 - cos) / 2
-    float w = 0;
-    if (T > 8) w = (float)((1 - std::cos((X(T) - 8.0f) * 0.25f * 3.141592653589793)) * 0.5);
-    if (T > 12) w = 1.0f;
-    if (0 > w) w = 0;
-    if (1 < w) w = 1.0f;
-    const X wx = X(w) * 4096.0f;
-    const int32_t wb = (int32_t)std::lrint(wx);
-    const int32_t wa = (int32_t)std::lrint(4096.0f - X((float)wx));
-    blend(wa, wb);
+    bubbles(T);
+    // from 16.16 to 8.24, as the intro has them (times 4096)
+    for (Point& p : grid_) p.u *= 4096, p.v *= 4096, p.light *= 4096;
     gridMap();
     fieldFromGrid();
 }
@@ -334,7 +299,7 @@ Uvl<T> water(T gx, T gy, float t, const std::vector<Drop>& drops, T edge = 0) {
         const T in = edge > 0 ? std::min(-a / edge, (T)1) : 1;
         w.light += std::max(std::cos(a), (T)0) * s * 50 * in;
     }
-    w.light = std::min(w.light, (T)((0x81 << 12) + 4095));   // the last level
+    w.light = std::min(w.light, (T)((kTop << 12) + 4095));   // the last level
     return w;
 }
 
@@ -343,13 +308,13 @@ Uvl<T> water(T gx, T gy, float t, const std::vector<Drop>& drops, T edge = 0) {
 void Pond::pondFrame(float t, const std::vector<Drop>& drops, int w, int h) {
     dacSet_ = false;                // frame() after this: set it again
     // the palette: in from white (pal3) over T 0-0.5, to blue over 0.5-1.5
-    if (t < 0.5f) setDac(3, (int32_t)std::lround(t * 128), 0, 0);
-    else if (t < 1.5f) setDac(2, (int32_t)std::lround((t - 0.5) * 64), 3, 1);
-    else copyDac(2);
+    if (t < 0.5f) fromWhite((int32_t)std::lround(t * 128));
+    else if (t < 1.5f) toBlue((int32_t)std::lround((t - 0.5) * 64));
+    else blue();
     for (int gy = 0; gy < kGridH; gy++)
         for (int gx = 0; gx < kGridW; gx++) {
             const Uvl<double> w = water<double>(gx, gy, t, drops);
-            // as the blend leaves them: times 4096
+            // in 8.24, as the intro has them: times 4096
             grid_[gy * kGridW + gx] = {(uint32_t)(int32_t)std::lround(w.u) << 12,
                                        (uint32_t)(int32_t)std::lround(w.v) << 12,
                                        (uint32_t)(int32_t)std::lround(w.light) << 12};
@@ -380,7 +345,7 @@ void Pond::pondFrame(float t, const std::vector<Drop>& drops, int w, int h) {
 void Pond::toArgb(uint32_t* out) const {
     uint32_t lut[256];
     for (int i = 0; i < 256; i++) {
-        auto c = [&](int k) { return (uint32_t)(dac_[3 * i + k] & 0x3F) * 255 / 63; };
+        auto c = [&](int k) { return (uint32_t)shown_[3 * i + k] * 255 / 63; };
         lut[i] = 0xFF000000u | c(0) << 16 | c(1) << 8 | c(2);
     }
     const uint8_t* s = screen();
@@ -421,10 +386,8 @@ void Pond::fieldFromGrid() {
 // - the marble is sampled between its 4x4 nearest texels, also Catmull-Rom
 //   (bilinear, magnified, shows the texels as diamonds); it wraps at 256,
 //   as the mapper's byte does;
-// - the light level is continuous: below 64, the texel J goes to
-//   J f + 128 (1 - f) with f at the fractional level; from 65, towards
-//   white by (L - 65) / 64; between, J as it is (both tables give J there).
-//   This is J A + B, tabled per 1/256 level;
+// - the light level is continuous: from 65 the texel J goes towards white
+//   by (L - 65) / 64, as the table's rows; under 65, J as it is;
 // - the palette index this gives is fractional too, read between two DAC
 //   entries of the unrounded palette.
 void Pond::toTrueColor(uint32_t* out, int w, int h) const {
@@ -467,7 +430,6 @@ void Pond::toTrueColor(uint32_t* out, int w, int h) const {
     };
     std::vector<Place> cols(w);
     for (int px = 0; px < w; px++) cols[px] = place(px, w, W, f.nx, f.ox, f.cx);
-    const int top = (int)litA_.size() - 1;
     auto rows = [&](int from, int to) {
         // one row of the field, interpolated down to this pixel row
         std::vector<float> u(f.nx), v(f.nx), l(f.nx);
@@ -503,8 +465,8 @@ void Pond::toTrueColor(uint32_t* out, int w, int h) const {
                 }
                 j = std::clamp(j, 0.0f, 255.0f);   // Catmull-Rom overshoots a little at edges
                 // lit, then between two palette entries
-                const int lvl = std::clamp((int)(at(l) * 256 + 0.5f), 0, top);
-                const float idx = std::clamp(j * litA_[lvl] + litB_[lvl], 0.0f, 255.0f);
+                const float up = std::clamp((at(l) - kHighlight) / kSteps, 0.0f, 1.0f);
+                const float idx = std::clamp(j + (255 - j) * up, 0.0f, 255.0f);
                 const int i0 = (int)idx;
                 const float a = idx - i0;
                 const float* e = lut + 3 * i0;

@@ -2,21 +2,17 @@
 // the start of part 8: drops falling in water over a marble, in
 // C++17 / SDL3.
 //
-// Usage: ctslasse-pond [--loop] [--256] [--res WxH] [--marble 256] [--scale N]
+// Usage: ctslasse-pond [--256] [--res WxH] [--marble 256] [--scale N]
 //            keys / mouse: click a drop where clicked, D a drop somewhere,
-//                  L the endless pond / the intro looped, C 32-bit colour /
-//                  the intro's 256 colours, M the marble at 256 / 512,
-//                  G the grid and the marble in a corner,
+//                  C 32-bit colour / the intro's 256 colours,
+//                  M the marble at 256 / 512,
+//                  G the grid and the marble, the light table and the palette, in the corners,
 //                  R restart, Space pause, Esc quit
-//        ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--loop] [--256] [--res WxH]
-//                      [--marble 256]
+//        ctslasse-pond --dump DIR [--frames N] [--start SECONDS] [--256] [--res WxH] [--marble 256]
 //            (no window: writes N frames, 70 per second, as DIR/fNNNN.ppm)
 //
-// Endless (the default): the intro's three drops, then more falling at
-// random, every 1-2.7 s, with the intro's ring for each. --loop / L: the
-// intro's own timeline, exact: the three drops, then from T 8 (5.5 s) the
-// palette turning red and the plane's waves blending in, until T 12 (8.2 s).
-// Shown in 32-bit colour (the default), at 1280x800 or --res, or as the
+// The pond: the intro's three drops, then more falling at random, every
+// 1-2.7 s, or where clicked, with the intro's ring for each. Shown in 32-bit colour (the default), at 1280x800 or --res, or as the
 // intro has it, in 256 colours at 320x200. Either is shown at 4:3. The
 // 32-bit picture uses the marble at 512x512 (--marble 256 / M: the intro's):
 // the same marble, with one more octave of detail and without the steps of
@@ -77,16 +73,11 @@ struct View {
     int h() const { return trueColor ? resH : pond::H; }
 };
 
-void draw(pond::Pond& p, Water& w, double seconds, bool loop, const View& v) {
-    if (loop) {
-        const double len = pond::kIntroEnd * pond::kUnit / pond::kPit;   // about 8.2 s
-        p.frame((int32_t)std::floor(std::fmod(seconds, len) * pond::kPit));
-    } else {
-        const float t = (float)partT(seconds);
-        w.update(t);
-        if (v.trueColor) p.pondFrame(t, w.drops, v.w(), v.h());   // the water at each pixel
-        else p.pondFrame(t, w.drops);
-    }
+void draw(pond::Pond& p, Water& w, double seconds, const View& v) {
+    const float t = (float)partT(seconds);
+    w.update(t);
+    if (v.trueColor) p.pondFrame(t, w.drops, v.w(), v.h());   // the water at each pixel
+    else p.pondFrame(t, w.drops);
 }
 
 void picture(const pond::Pond& p, const View& v, std::vector<uint32_t>& argb) {
@@ -95,10 +86,10 @@ void picture(const pond::Pond& p, const View& v, std::vector<uint32_t>& argb) {
     else p.toArgb(argb.data());
 }
 
-int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double start, bool loop, const View& v) {
+int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double start, const View& v) {
     std::vector<uint32_t> argb;
     for (int f = 0; f < frames; f++) {
-        draw(p, w, start + f / 70.0, loop, v);
+        draw(p, w, start + f / 70.0, v);
         picture(p, v, argb);
         char path[1024];
         std::snprintf(path, sizeof path, "%s/f%04d.ppm", dir.c_str(), f);
@@ -126,6 +117,13 @@ int dump(pond::Pond& p, Water& w, const std::string& dir, int frames, double sta
 // placed from its neighbour by their difference, so the mesh shows whole,
 // over the marble tiled as far as it reaches. The points are coloured by
 // their light level: grey below 64 (shaded), white-blue above 65 (lit).
+//
+// And the light table, in the top right corner: its rows S = level - 65,
+// 0-64 (down), by 256 texels (across), each entry through the DAC: the
+// colour a texel J takes at step S. Row 0 is the marble as it is (the water
+// at rest), the rows below take it towards the top of the palette (all of
+// it at 64). The bars at the right count the grid's points at each step
+// (what the frame uses).
 class Inspector {
 public:
     bool on = false;
@@ -156,10 +154,10 @@ public:
             tw_ = tw, th_ = th;
         }
         const uint8_t* m = big ? p.texture512() : p.texture();
-        const uint8_t* dac = p.dac();
+        const uint8_t* dac = p.shownDac();
         uint32_t lut[256];
         for (int i = 0; i < 256; i++) {
-            auto c = [&](int k) { return (uint32_t)(dac[3 * i + k] & 0x3F) * 160 / 63; };   // dimmed
+            auto c = [&](int k) { return (uint32_t)dac[3 * i + k] * 160 / 63; };   // dimmed
             lut[i] = 0xFF000000u | c(0) << 16 | c(1) << 8 | c(2);
         }
         pixels_.resize((size_t)tw * th);
@@ -211,17 +209,108 @@ public:
         }
         SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
         SDL_RenderDebugText(ren, ox, oy + panel.h + 4, label.c_str());
+        lightTable(ren, p, level, ww, wh);
+        palette(ren, p, ww, wh);
         SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_SetRenderLogicalPresentation(ren, lw, lh, mode);
     }
     // before the renderer goes
     void release() {
         if (tex_) SDL_DestroyTexture(tex_);
-        tex_ = nullptr;
+        if (light_) SDL_DestroyTexture(light_);
+        tex_ = light_ = nullptr;
     }
 
 private:
+    // the light table's panel, in the top right corner of a WW x WH window
+    void lightTable(SDL_Renderer* ren, const pond::Pond& p, const int* level, int ww, int wh) {
+        constexpr int rows = pond::kRows;
+        if (!light_) {
+            light_ = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 256, rows);
+            SDL_SetTextureScaleMode(light_, SDL_SCALEMODE_NEAREST);
+        }
+        const uint8_t* dac = p.shownDac();
+        const uint8_t* t = p.lightTable();
+        uint32_t px[256 * rows];
+        for (int i = 0; i < 256 * rows; i++) {
+            auto c = [&](int k) { return (uint32_t)dac[3 * t[i] + k] * 255 / 63; };
+            px[i] = 0xFF000000u | c(0) << 16 | c(1) << 8 | c(2);
+        }
+        SDL_UpdateTexture(light_, nullptr, px, 256 * 4);
+        // the table, the bars beside it (a quarter of its width)
+        const float k = std::max(0.5f, std::floor(std::min(ww * 0.35f / 320, wh * 0.55f / rows) * 4) / 4);
+        const float tw = 256 * k, th = rows * k, bars = 64 * k;
+        const float ox = ww - 8 - tw - bars - 4, oy = 8;
+        const std::string label = "light table: step 0-64 (level - 65) down, texel across";
+        const float textW = (float)label.size() * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
+        const float right = ww - 5.0f, left = std::min(ox - 3, right - textW - 6);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 220);
+        const SDL_FRect back = {left, oy - 3, right - left, th + 18};
+        SDL_RenderFillRect(ren, &back);
+        const SDL_FRect panel = {ox, oy, tw, th};
+        SDL_RenderTexture(ren, light_, nullptr, &panel);
+        // the grid's points per step
+        int count[rows] = {};
+        constexpr int n = pond::kGridW * pond::kGridH;
+        for (int i = 0; i < n; i++) count[std::clamp(level[i] - pond::kHighlight, 0, rows - 1)]++;
+        const int most = *std::max_element(count, count + rows);
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 220);
+        for (int l = 0; l < rows; l++)
+            if (count[l]) {
+                // a square root, so a few points still show next to the many at rest
+                const float len = std::max(1.0f, bars * std::sqrt((float)count[l] / most));
+                const SDL_FRect bar = {ox + tw + 4, oy + l * k, len, std::max(1.0f, k)};
+                SDL_RenderFillRect(ren, &bar);
+            }
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+        SDL_RenderDebugText(ren, left + 3, oy + th + 4, label.c_str());
+    }
+
+    // the DAC's panel, in the bottom left corner: its 256 entries as a strip
+    // (index across), and above it their red, green and blue (0-63) as
+    // curves. A ramp from dark to light is what lets the light table move an
+    // index to brighten or dull a texel. Ticks mark 0, 64, 128, 192 and 255.
+    void palette(SDL_Renderer* ren, const pond::Pond& p, int ww, int wh) {
+        const uint8_t* dac = p.shownDac();
+        const float k = std::max(1.0f, std::floor(std::min(ww * 0.45f / 256, wh * 0.4f / 100) * 4) / 4);
+        const float pw = 256 * k, ch = 63 * k * 0.6f, sh = 16 * k;
+        const float ox = 8, oy = wh - 8 - 14 - sh - 4 - ch;
+        const std::string label = "palette (DAC): index 0-255 across, R G B 0-63 above";
+        const float textW = (float)label.size() * SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 220);
+        const SDL_FRect back = {ox - 3, oy - 3, std::max(pw, textW) + 6, ch + 4 + sh + 18};
+        SDL_RenderFillRect(ren, &back);
+        // the curves, on a faint frame
+        SDL_SetRenderDrawColor(ren, 80, 80, 80, 200);
+        const SDL_FRect frame = {ox, oy, pw, ch};
+        SDL_RenderRect(ren, &frame);
+        const Uint8 col[3][3] = {{255, 80, 80}, {80, 255, 80}, {100, 140, 255}};
+        for (int c = 0; c < 3; c++) {
+            SDL_FPoint pts[256];
+            for (int i = 0; i < 256; i++)
+                pts[i] = {ox + (i + 0.5f) * k, oy + ch - dac[3 * i + c] * ch / 63};
+            SDL_SetRenderDrawColor(ren, col[c][0], col[c][1], col[c][2], 230);
+            SDL_RenderLines(ren, pts, 256);
+        }
+        // the strip
+        const float sy = oy + ch + 4;
+        for (int i = 0; i < 256; i++) {
+            auto c = [&](int j) { return (Uint8)(dac[3 * i + j] * 255 / 63); };
+            SDL_SetRenderDrawColor(ren, c(0), c(1), c(2), 255);
+            const SDL_FRect r = {ox + i * k, sy, k, sh};
+            SDL_RenderFillRect(ren, &r);
+        }
+        SDL_SetRenderDrawColor(ren, 255, 210, 40, 230);
+        for (int i : {0, 64, 128, 192, 255}) {
+            const float x = ox + (i + 0.5f) * k;
+            SDL_RenderLine(ren, x, sy + sh, x, sy + sh + 3);
+        }
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+        SDL_RenderDebugText(ren, ox, sy + sh + 5, label.c_str());
+    }
+
     SDL_Texture* tex_ = nullptr;
+    SDL_Texture* light_ = nullptr;
     int tw_ = 0, th_ = 0;
     std::vector<uint32_t> pixels_;
 };
@@ -232,7 +321,6 @@ int main(int argc, char** argv) {
     std::string dumpDir;
     int scale = 3, frames = 70;
     double start = 0;
-    bool loop = false;
     int marble = 512;
     View view;
     for (int i = 1; i < argc; i++) {
@@ -241,7 +329,6 @@ int main(int argc, char** argv) {
         else if (a == "--dump" && i + 1 < argc) dumpDir = argv[++i];
         else if (a == "--frames" && i + 1 < argc) frames = std::atoi(argv[++i]);
         else if (a == "--start" && i + 1 < argc) start = std::max(0.0, std::atof(argv[++i]));
-        else if (a == "--loop") loop = true;
         else if (a == "--256") view.trueColor = false;
         else if (a == "--res" && i + 1 < argc && std::sscanf(argv[i + 1], "%dx%d", &view.resW, &view.resH) == 2 &&
                  view.resW > 0 && view.resH > 0 && view.resW <= 7680 && view.resH <= 4800)
@@ -250,8 +337,8 @@ int main(int argc, char** argv) {
             marble = std::atoi(argv[++i]);
         else {
             std::fprintf(stderr,
-                         "usage: ctslasse-pond [--loop] [--256] [--res WxH] [--marble 256|512] [--scale N] | "
-                         "--dump DIR [--frames N] [--start S] [--loop] [--256] [--res WxH] [--marble 256|512]\n");
+                         "usage: ctslasse-pond [--256] [--res WxH] [--marble 256|512] [--scale N] | "
+                         "--dump DIR [--frames N] [--start S] [--256] [--res WxH] [--marble 256|512]\n");
             return 1;
         }
     }
@@ -260,8 +347,8 @@ int main(int argc, char** argv) {
     Water water;
     if (!dumpDir.empty()) {
         // the random drops up to START, as a window would have had them
-        if (!loop) water.update((float)partT(start));
-        return dump(*p, water, dumpDir, frames, start, loop, view);
+        water.update((float)partT(start));
+        return dump(*p, water, dumpDir, frames, start, view);
     }
 
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -271,7 +358,7 @@ int main(int argc, char** argv) {
     // 320x200 shown at 4:3, as on a VGA monitor in mode 13h
     SDL_Window* win = SDL_CreateWindow("ctslasse-pond", 320 * scale, 240 * scale, SDL_WINDOW_RESIZABLE);
     auto setTitle = [&] {
-        std::string title = loop ? "ctslasse-pond - the intro, looped" : "ctslasse-pond - endless (click: a drop)";
+        std::string title = "ctslasse-pond (click: a drop)";
         title += view.trueColor ? " - 32-bit, " + std::to_string(view.resW) + "x" + std::to_string(view.resH) +
                                       ", marble " + std::to_string(p->marble())
                                 : std::string(" - 256 colours");
@@ -306,7 +393,7 @@ int main(int argc, char** argv) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) running = false;
-            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT && !loop) {
+            if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT) {
                 // the window's point on the view, then the grid's cells (40 across, 25 down)
                 float x = e.button.x, y = e.button.y;
                 SDL_RenderCoordinatesFromWindow(ren, x, y, &x, &y);
@@ -319,7 +406,7 @@ int main(int argc, char** argv) {
             case SDL_SCANCODE_SPACE: paused = !paused; break;
             case SDL_SCANCODE_R: restart(); break;
             case SDL_SCANCODE_D:
-                if (!loop) water.randomDrop((float)partT(t));
+                water.randomDrop((float)partT(t));
                 break;
             case SDL_SCANCODE_C:
                 view.trueColor = !view.trueColor;
@@ -331,11 +418,6 @@ int main(int argc, char** argv) {
                 p->setMarble(p->marble() == 512 ? 256 : 512);
                 setTitle();
                 break;
-            case SDL_SCANCODE_L:
-                loop = !loop;
-                restart();
-                setTitle();
-                break;
             default: break;
             }
         }
@@ -343,13 +425,13 @@ int main(int argc, char** argv) {
         if (!paused) t += (double)(now - last) / (double)freq;
         last = now;
         // endless: after a day the part's time is set back (the palette has long settled)
-        if (!loop && t > 86400) {
+        if (t > 86400) {
             const float back = (float)partT(t - 60);
             for (Drop& d : water.drops) d.t -= back;
             water.next -= back;
             t = 60;
         }
-        draw(*p, water, t, loop, view);
+        draw(*p, water, t, view);
         picture(*p, view, argb);
         SDL_UpdateTexture(tex, nullptr, argb.data(), view.w() * 4);
         SDL_RenderClear(ren);
