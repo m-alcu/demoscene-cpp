@@ -89,6 +89,35 @@ ctslasse-pond. Each frame:
 4. **The light and the colours.** The palette is red-yellow and blue.
    Light levels above the base run towards white.
 
+### The source
+
+A frame goes through the modules from top to bottom. Each one can be read
+on its own, and the first file to open is `src/tunnel.cpp`: `frame()` is
+two calls, the timeline and then the mapper.
+
+| File | What it does | In the intro |
+|---|---|---|
+| `src/common.h` | The shared types: the x87's `long double`, the screen, the part's clock, the grid (`Point`, `Grid`). | |
+| `src/precalc/texture.cpp` | Once: the marble tile, three fractals (`plasma`), one warped by the other two (`displace`), and the logo embossed in it. | 18A6Ch |
+| `src/precalc/logo.cpp` | The logo's mask, the only stored picture: 1820 bytes of run lengths, and `logoMask()` to write them out. | 2179Eh, 18588h |
+| `src/precalc/light.cpp` | Once: the light tables, texel x level to a palette index (fog below, white above). | 1C7C0h |
+| `src/precalc/palette.cpp` | The three palettes as gradients, and the fades into the DAC (`fromWhite`, `mix`, `toBlack`). | |
+| `src/timeline.cpp` | Each frame: from the clock, which effects are on, the tunnel's parameters (`tunnelAt()`, the table below as code), the blend and the palette's fade. | 1C776h |
+| `src/effects/drops.cpp` | The three rings of T 0-12, into a grid. | 1CB2Bh |
+| `src/effects/plane.cpp` | The waving plane, into a grid. | 1CDF8h |
+| `src/effects/tunnel.cpp` | The tunnel, into a grid: angle to u, zoom / r to v. | 1C5CBh |
+| `src/effects/blend.cpp` | Two grids mixed. | 150BEh |
+| `src/render/mapper.cpp` | The grid to 320x200 in 256 colours: the intro's picture. | 14DF4h |
+| `src/render/truecolor.cpp` | The same grid in 32-bit colour at any size. | not in it |
+| `src/tunnel.cpp` | `Tunnel`: holds the texture, the tables, the grid and the DAC, and calls the above; `morph()` for the loop. | |
+| `src/app/` | The player: `main.cpp` (options, window, keys), `playback.cpp` (the loop, the frame dump), `inspector.cpp` (**G**). Only this needs SDL. | not in it |
+
+The effects never touch a pixel. Each writes 41x26 points saying where the
+texture is read and how lit it is, and the renderers know nothing of which
+effect wrote them. That is why two effects can be blended (their grids are
+mixed, not their pictures) and why the same frame can be drawn at
+1280x800.
+
 ### The timeline
 
 | T | What happens |
@@ -108,20 +137,32 @@ ctslasse-pond. Each frame:
 ### The loop
 
 The intro fades the part out to black over T 68-72. Looped, the fade is
-left out, and over the last 5 T (T 67-72, 3.4 s) the frame turns into the
-frames that follow the start: at a time t in it, `morph()` makes the frame
-at t and the frame at `start + (t − (end − 5 T))`, and mixes them:
+left out, and over the last 5 T (T 67-72, 3.4 s) the tunnel turns back
+into the plane, by the intro's own blend of the tunnel in over the plane
+(T 33-38) run the other way. At a time t in it, `morph()` makes the frame
+at t and the frame at `start + (t − (end − 5 T))`, and mixes their grids
+point by point, `grid = tunnel·a + plane·b` with `a + b = 4096`, as 150BEh
+does, and their DACs (with the default start both are the red palette).
+The plane's weight rises as `(1 − cos)/2`, the mirror of the intro's
+`(1 + cos)/2`, and over as long.
 
-- their grids, point by point: u and v by their difference, the shorter
-  way round the 256-texel wrap; the light as it is;
-- their DACs (with the default start both are the red palette).
+The grids are mixed unwrapped, as the intro's are: u and v are not cut to
+the texture's 256 texels until after the mix, so every point moves the
+same way. By T 67 the tunnel has flown thousands of texels; its flight is
+counted from the whole turns of the texture nearest to it at the morph's
+start, which changes nothing in its own picture and keeps the mix from
+sweeping through them (in the intro the flight is counted from T 38, so it
+is small during the blend).
 
-The weight eases in and out, `(1 − cos)/2`, the curve of the intro's own
-blend of the tunnel in over the plane (T 33-38), and as long. At the end
-the frame *is* the one 5 T after the start, so the loop goes on from
-there: the start itself is shown only the first time, and each loop after
-lasts 49.1 − 8.2 − 3.4 = 37.5 s. With the default start the tunnel opens
-out and swirls back into the waving plane. `--start` is held to 42.3 s at
+The tunnel's u is its angle, which jumps by 256 texels along the row to
+the left of the centre. Whole, that is a full turn of the texture and does
+not show; mixed with the plane it is a fraction of one, and shows as a
+thin horizontal line from the centre to the left edge. The intro's blend
+at T 33-38 has the same line.
+
+At the end the frame *is* the one 5 T after the start, so the loop goes on
+from there: the start itself is shown only the first time, and each loop
+after lasts 49.1 − 8.2 − 3.4 = 37.5 s. `--start` is held to 42.3 s at
 most, so that a loop is at least as long as its morph. Endless mode does
 not morph.
 

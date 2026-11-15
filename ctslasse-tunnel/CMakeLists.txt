@@ -13,13 +13,33 @@ add_compile_options(-Wall -Wextra -ffp-contract=off)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
 
-add_library(core STATIC src/tunnel.cpp src/grid.cpp)
+# The part itself, with no SDL in it (the tests link it alone). In the order
+# a frame goes through it:
+add_library(core STATIC
+    # once, at start-up: the texture (and its logo), the light tables, the palettes
+    src/precalc/logo.cpp
+    src/precalc/texture.cpp
+    src/precalc/light.cpp
+    src/precalc/palette.cpp
+    # each frame: the time -> the effects on, their parameters, the DAC
+    src/timeline.cpp
+    # the effects, each written into a grid of (u, v, light)
+    src/effects/drops.cpp
+    src/effects/plane.cpp
+    src/effects/tunnel.cpp
+    src/effects/blend.cpp
+    # the grid -> pixels
+    src/render/mapper.cpp
+    src/render/truecolor.cpp
+    # the class that joins them
+    src/tunnel.cpp)
 target_include_directories(core PUBLIC src)
 # the 32-bit picture is drawn in bands of rows, one per thread
 find_package(Threads REQUIRED)
 target_link_libraries(core PUBLIC Threads::Threads)
 
-add_executable(ctslasse-tunnel src/main.cpp)
+# The player: the window, the keys, the loop, the inspector, the frame dump
+add_executable(ctslasse-tunnel src/app/main.cpp src/app/playback.cpp src/app/inspector.cpp)
 target_link_libraries(ctslasse-tunnel PRIVATE core PkgConfig::SDL3)
 
 enable_testing()
