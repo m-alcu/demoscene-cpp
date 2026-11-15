@@ -3,7 +3,9 @@
 // each at the clock the intro read for it; the CRC32 of the screen, the DAC
 // and the grid compared.
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <vector>
 
 #include "tunnel.h"
 
@@ -31,6 +33,11 @@ int main(int argc, char** argv) {
     }
     auto p = std::make_unique<tunnel::Tunnel>(true);   // the intro's texture, with the logo
     int failures = 0, frames = 0, bad = 0;
+    // the 32-bit picture (no reference): every tenth frame at 320x200, its
+    // mean difference per channel from the 256-colour one
+    std::vector<uint32_t> a(64000), b(64000);
+    double worst = 0;
+    int worstFrame = 0;
     char line[256];
     while (std::fgets(line, sizeof line, f)) {
         int n;
@@ -50,11 +57,22 @@ int main(int argc, char** argv) {
                                 clock, tunnel::Tunnel::partTime((int32_t)clock), gs, scr, gd, dac, gg, grid);
                 bad++;
             }
+            if (n % 10 == 0) {
+                p->toArgb(a.data());
+                p->toTrueColor(b.data(), tunnel::W, tunnel::H, false);
+                long sum = 0;
+                for (int i = 0; i < 64000; i++)
+                    for (int s = 0; s < 24; s += 8) sum += std::abs((int)(a[i] >> s & 0xFF) - (int)(b[i] >> s & 0xFF));
+                const double mean = sum / (64000.0 * 3);
+                if (mean > worst) worst = mean, worstFrame = n;
+            }
         }
     }
     std::fclose(f);
     std::printf("%d frames, %d differ\n", frames, bad);
-    failures += bad + (frames != 3435);
+    std::printf("32-bit picture: mean difference per channel at most %.1f (frame %d)%s\n", worst, worstFrame,
+                worst < 24 ? "" : " TOO LARGE");
+    failures += bad + (frames != 3435) + (worst >= 24);
     std::printf(failures ? "FAILED\n" : "all passed\n");
     return failures ? 1 : 0;
 }

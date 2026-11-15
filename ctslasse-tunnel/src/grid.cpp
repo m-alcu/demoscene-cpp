@@ -121,6 +121,9 @@ void Tunnel::cosPos(float x) {
 // angle in 256ths), depth (v, P5 + P2 / r), light; the walls waving by P6
 // at a phase P3, P1 the angle's twist.
 void Tunnel::tunnel(uint32_t grid, float p1, float p2, float p3, int32_t p4, int32_t p5, float p6) {
+    info_.tunnel = true;
+    info_.twist = p1, info_.zoom = p2, info_.phase = p3, info_.wave = p6;
+    info_.u0 = p4 / 4096.0f, info_.v0 = p5 / 4096.0f;
     auto D = [&](uint32_t a) { return (X)f64(a); };
     F.fld(p2), F.fmul(D(0x293EC));
     F.fld(p1), F.fldst(0), F.fmul(D(0x293F4));
@@ -186,6 +189,7 @@ void Tunnel::blend(uint32_t dst, uint32_t a, uint32_t b, int32_t wa, int32_t wb)
 // each pushes the points around it outwards (by sin of the distance inside
 // it), lit by its cosine.
 void Tunnel::bubbles(uint32_t grid, float t) {
+    info_.drops = true;
     auto D = [&](uint32_t a) { return (X)f64(a); };
     auto Fl = [&](uint32_t a) { return (X)f32(a); };
     F.fld(t), F.fmul(Fl(0x294C0));
@@ -272,6 +276,7 @@ void Tunnel::bubbles(uint32_t grid, float t) {
 // and twisting, a ring of light moving out from the centre; into the
 // second grid (+31F8h).
 void Tunnel::wobble(uint32_t grid, float t) {
+    info_.plane = true;
     auto D = [&](uint32_t a) { return (X)f64(a); };
     auto Fl = [&](uint32_t a) { return (X)f32(a); };
     auto bits = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };

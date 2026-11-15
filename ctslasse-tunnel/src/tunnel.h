@@ -32,6 +32,11 @@ public:
     // The frame at CLOCK (PIT ticks since the part began): the grid, the
     // picture and the DAC as the intro has them.
     void frame(int32_t clock);
+    // The frames at CLOCK and at CLOCK_TO, mixed (W 0: CLOCK's, 1: CLOCK_TO's):
+    // their grids (u and v the shorter way round the 256-texel wrap) and
+    // their DACs, then drawn. The loop's end turns into its start with it.
+    // (Not in the intro.)
+    void morph(int32_t clock, int32_t clockTo, float w);
     static float partTime(int32_t clock) { return (float)((double)clock / kUnit); }
     bool fadeOut = true;            // false: no fade over T 68-72 (it runs on)
 
@@ -40,7 +45,28 @@ public:
     const uint8_t* texture() const { return mem_ + kTex; }      // with the logo: the intro's [2B4C0h] + 130000h
     const uint8_t* lightTable() const { return mem_ + kLight; } // 130 x 256
     const uint8_t* grid() const { return mem_ + kGrid; }        // 41 x 26 x (u, v, light), 3198 dwords
+    // the picture in 256 colours, as the intro shows it (the screen through the DAC)
     void toArgb(uint32_t* out) const;
+    // The same frame in 32-bit colour, at any size (WxH, shown at 4:3 as
+    // 320x200 is): u, v and the light interpolated per pixel from the grid
+    // at full precision (SMOOTH: Catmull-Rom between the 4x4 points around,
+    // else bilinearly, as the mapper does), the texture filtered
+    // (Catmull-Rom), the light levels and the palettes computed without
+    // rounding. Call after frame().
+    void toTrueColor(uint32_t* out, int w = W, int h = H, bool smooth = true) const;
+
+    // What the frame drew, for the inspector (none of it is used to draw)
+    struct Info {
+        float t = 0;                // the part's time
+        bool drops = false, plane = false, tunnel = false;
+        float planeShare = 0;       // the plane's weight in the blend (0-1), the rest the drops' or the tunnel's
+        float twist = 0, zoom = 0, phase = 0, wave = 0;   // the tunnel's
+        float u0 = 0, v0 = 0;       // its turn and its forward movement, in texels
+        float morph = 0;            // the loop's morph into its start (0-1), and the time it goes to
+        float morphTo = 0;
+    };
+    const Info& info() const { return info_; }
+    static constexpr int kGridW = 41, kGridH = 26;
 
 private:
     // the flat memory: the grid mapper's variables (1E500h-1E57Fh), the two
@@ -57,8 +83,12 @@ private:
     static void rle(uint8_t* dst, const uint8_t* data, int c1, int c2);
     static void gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                          int32_t n);
+    // the same gradient unrounded (32-bit colour)
+    static void gradient(float* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
+                         int32_t n);
 
     // grid.cpp: the port's routines
+    void update(int32_t clock);     // frame() without drawing: the grid and the DAC
     void gridMap(uint32_t dst, uint32_t grid, uint32_t tex, uint32_t light);
     void ease(float x);
     void cosPos(float x);
@@ -67,7 +97,8 @@ private:
     void bubbles(uint32_t grid, float t);
     void wobble(uint32_t grid, float t);
 
-    void setDac(const uint8_t* src, int32_t k, const uint8_t* mix, int mode);
+    enum { kPal1, kPal2, kPal3 };   // red - yellow - blue, black - blue - white, black - white
+    void setDac(int src, int32_t k, int mix, int mode);
 
     uint8_t r8(uint32_t a) const { return mem_[a]; }
     uint32_t r32(uint32_t a) const;
@@ -80,7 +111,9 @@ private:
     Fpu F;
     std::vector<uint8_t> memory_;
     uint8_t* mem_;
-    uint8_t pal1_[768], pal2_[768], pal3_[768], dac_[768];
+    uint8_t pal_[3][768], dac_[768];
+    float palF_[3][768], dacF_[768];    // the same, unrounded (6-bit scale, 0-63)
+    Info info_;
     bool dacSet_ = false;           // the palette written (else a start past the fades stays white)
     float lastT_ = 0;
 };
