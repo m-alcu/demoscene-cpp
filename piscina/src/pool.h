@@ -82,6 +82,10 @@ struct Caustics {
     std::vector<float> pu, pv;      // where each photon lands, texels
     std::vector<float> map, tmp;    // the light, kCW x kCH (1 at rest)
     bool on = false;                // computed this frame (else 1 everywhere)
+    // each thread's photons, added up in its own map (only its rows lo..hi,
+    // inclusive, are used), then the maps summed into MAP
+    std::vector<std::vector<float>> band;
+    std::vector<int> lo, hi;
     // the light at a point of the bottom, between the four nearest cells
     float at(float u, float v) const;
 };

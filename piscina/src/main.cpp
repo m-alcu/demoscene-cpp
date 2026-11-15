@@ -3,8 +3,9 @@
 // waves always running, and the sun's light gathered on the bottom by them
 // (the caustics), in C++17 / SDL3.
 //
-// Usage: piscina [--256] [--res WxH] [--tiles 256] [--ripples S] [--no-caustics] [--scale N]
+// Usage: piscina [--256] [--res WxH] [--tiles 256] [--ripples S] [--no-caustics] [--no-drops] [--scale N]
 //            keys / mouse: click a drop where clicked, D a drop somewhere,
+//                  B drops falling on / off (off: only the pool's small waves),
 //                  W the small waves' strength (0, 0.5, 1, 1.5),
 //                  K the caustics on / off,
 //                  C 32-bit colour / 256 colours,
@@ -12,13 +13,15 @@
 //                  G the grid, the light table, the palette and the caustics, in the corners,
 //                  R restart, Space pause, Esc quit
 //        piscina --dump DIR [--frames N] [--start SECONDS] [--256] [--res WxH] [--tiles 256] [--ripples S]
-//            [--no-caustics]
+//            [--no-caustics] [--no-drops]
 //            (no window: writes N frames, 70 per second, as DIR/fNNNN.ppm)
 //
 // The pool: the intro's three drops, then more falling at random, every
 // 1-2.7 s, or where clicked, with the intro's ring for each. Shown in 32-bit
 // colour (the default), at 1280x800 or --res, or in 256 colours at 320x200.
-// Either is shown at 4:3.
+// Either is shown at 4:3. With --no-drops (or B) nothing falls: the water
+// is only the small waves always running over the pool, and their caustics
+// (a click or D still drops one).
 #include <SDL3/SDL.h>
 
 #include <algorithm>
@@ -42,11 +45,17 @@ struct Water {
     std::vector<Drop> drops = piscina::Pool::introDrops();
     std::mt19937 rng{1995};
     float next = 4.0f;      // T
+    bool rain = true;       // the intro's drops and the random ones (else only the small waves)
 
     void reset() {
-        drops = piscina::Pool::introDrops();
+        drops = rain ? piscina::Pool::introDrops() : std::vector<Drop>{};
         rng.seed(1995);
         next = 4.0f;
+    }
+    // drops falling or not: those in the water finish their rings
+    void setRain(bool on, float t) {
+        rain = on;
+        if (on) next = std::max(next, t + 0.5f);   // not all those missed at once
     }
     void drop(float x, float y, float t) { drops.push_back({x, y, t, false}); }
     void randomDrop(float t) {
@@ -56,7 +65,7 @@ struct Water {
     }
     // at T: the random drops due, the finished ones gone
     void update(float t) {
-        while (t >= next) {
+        while (rain && t >= next) {
             randomDrop(next);
             next += std::uniform_real_distribution<float>(1.5f, 4.0f)(rng);
         }
@@ -364,7 +373,7 @@ int main(int argc, char** argv) {
     double start = 0;
     int tiles = 512;
     float ripples = 1.0f;
-    bool caustics = true;
+    bool caustics = true, rain = true;
     View view;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -380,11 +389,13 @@ int main(int argc, char** argv) {
             tiles = std::atoi(argv[++i]);
         else if (a == "--ripples" && i + 1 < argc) ripples = (float)std::max(0.0, std::atof(argv[++i]));
         else if (a == "--no-caustics") caustics = false;
+        else if (a == "--no-drops") rain = false;
         else {
             std::fprintf(stderr,
-                         "usage: piscina [--256] [--res WxH] [--tiles 256|512] [--ripples S] [--no-caustics] [--scale N] | "
+                         "usage: piscina [--256] [--res WxH] [--tiles 256|512] [--ripples S] [--no-caustics] [--no-drops] "
+                         "[--scale N] | "
                          "--dump DIR [--frames N] [--start S] [--256] [--res WxH] [--tiles 256|512] [--ripples S] "
-                         "[--no-caustics]\n");
+                         "[--no-caustics] [--no-drops]\n");
             return 1;
         }
     }
@@ -393,6 +404,8 @@ int main(int argc, char** argv) {
     p->setRipples(ripples);
     p->setCaustics(caustics);
     Water water;
+    water.rain = rain;
+    water.reset();
     if (!dumpDir.empty()) {
         // the random drops up to START, as a window would have had them
         water.update((float)partT(start));
@@ -409,7 +422,8 @@ int main(int argc, char** argv) {
         char waves[32];
         std::snprintf(waves, sizeof waves, "%.1f", p->ripples());
         std::string title = "piscina (click: a drop) - waves " + std::string(waves) +
-                            (p->caustics() ? ", caustics" : ", no caustics");
+                            (p->caustics() ? ", caustics" : ", no caustics") +
+                            (water.rain ? "" : ", no drops");
         title += view.trueColor ? " - 32-bit, " + std::to_string(view.resW) + "x" + std::to_string(view.resH) +
                                       ", tiles " + std::to_string(p->tiles())
                                 : std::string(" - 256 colours");
@@ -471,6 +485,10 @@ int main(int argc, char** argv) {
                 break;
             case SDL_SCANCODE_W:
                 p->setRipples(p->ripples() >= 1.5f ? 0.0f : p->ripples() + 0.5f);
+                setTitle();
+                break;
+            case SDL_SCANCODE_B:
+                water.setRain(!water.rain, (float)partT(t));
                 setTitle();
                 break;
             case SDL_SCANCODE_K:

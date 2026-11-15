@@ -4,6 +4,9 @@
 #include <cmath>
 #include <cstring>
 #include <iterator>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
 #include <random>
 #include <thread>
 #include <type_traits>
@@ -22,14 +25,81 @@ inline uint32_t next(uint32_t& seed) {
     return (uint32_t)((int32_t)seed >> 16);
 }
 
-// ROWS(from, to) over rows 0..H, in bands, one per thread (or in this one)
+// The worker threads, started once and kept waiting: starting them for each
+// band of every frame costs more than some of the bands take.
+class Workers {
+public:
+    static Workers& get() {
+        static Workers w;
+        return w;
+    }
+    int size() const { return (int)threads_.size() + 1; }
+    // JOB(b) for b = 0..N-1 (N up to size()), b 0 in this thread
+    void run(int n, const std::function<void(int)>& job) {
+        std::lock_guard<std::mutex> one(dispatch_);
+        n = std::clamp(n, 1, size());
+        {
+            std::lock_guard<std::mutex> l(m_);
+            job_ = &job, n_ = n, left_ = n - 1, gen_++;
+        }
+        wake_.notify_all();
+        job(0);
+        std::unique_lock<std::mutex> l(m_);
+        done_.wait(l, [&] { return left_ == 0; });
+        job_ = nullptr;
+    }
+
+private:
+    Workers() {
+        const int n = (int)std::clamp(std::thread::hardware_concurrency(), 1u, 64u);
+        for (int i = 1; i < n; i++) threads_.emplace_back([this, i] { loop(i); });
+    }
+    ~Workers() {
+        {
+            std::lock_guard<std::mutex> l(m_);
+            quit_ = true;
+        }
+        wake_.notify_all();
+        for (std::thread& t : threads_) t.join();
+    }
+    void loop(int b) {
+        uint64_t seen = 0;
+        for (;;) {
+            std::unique_lock<std::mutex> l(m_);
+            wake_.wait(l, [&] { return quit_ || gen_ != seen; });
+            if (quit_) return;
+            seen = gen_;
+            if (b >= n_) continue;
+            const std::function<void(int)>* job = job_;
+            l.unlock();
+            (*job)(b);
+            l.lock();
+            if (--left_ == 0) done_.notify_one();
+        }
+    }
+    std::vector<std::thread> threads_;
+    std::mutex dispatch_, m_;
+    std::condition_variable wake_, done_;
+    const std::function<void(int)>* job_ = nullptr;
+    int n_ = 0, left_ = 0;
+    uint64_t gen_ = 0;
+    bool quit_ = false;
+};
+
+int bands(bool threaded) { return threaded ? Workers::get().size() : 1; }
+
+// ROWS(from, to) over rows 0..H, in bands, one per thread (or in this one).
+// BAND(b, from, to) is told which band it is (0..bands(threaded)-1).
+template <class F>
+void inBandsNumbered(int h, bool threaded, const F& band) {
+    const int n = bands(threaded);
+    if (n == 1) return band(0, 0, h);
+    Workers::get().run(n, [&](int b) { band(b, h * b / n, h * (b + 1) / n); });
+}
+
 template <class F>
 void inBands(int h, bool threaded, const F& rows) {
-    const int n = threaded ? (int)std::clamp(std::thread::hardware_concurrency(), 1u, 16u) : 1;
-    std::vector<std::thread> threads;
-    for (int b = 1; b < n; b++) threads.emplace_back(rows, h * b / n, h * (b + 1) / n);
-    rows(0, h / n);
-    for (std::thread& t : threads) t.join();
+    inBandsNumbered(h, threaded, [&](int, int from, int to) { rows(from, to); });
 }
 
 }  // namespace
@@ -354,18 +424,22 @@ Uvl<T> water(T gx, T gy, float t, const std::vector<Drop>& drops, T edge = 0) {
 // down there, sees the bottom (the water's u and v, drops and waves). A
 // photon is sent from every quarter texel of the surface and added where it
 // lands; where the waves bend neighbouring rays together, the light
-// gathers. The photons are found in bands of rows, one per thread; then
-// added up in this one.
+// gathers. The photons are found and added up in bands of rows, one per
+// thread, each into its own map; the maps are then summed, and blurred, in
+// bands of the map's rows.
 void Pool::causticsPass(float t, const std::vector<Drop>& drops) {
     Caustics& c = caustics_;
     constexpr int pw = Caustics::kPW, ph = Caustics::kPH, cw = Caustics::kCW, ch = Caustics::kCH;
     c.pu.resize((size_t)pw * ph), c.pv.resize((size_t)pw * ph);
-    c.map.assign((size_t)cw * ch, 0.0f), c.tmp.resize((size_t)cw * ch);
+    c.map.resize((size_t)cw * ch), c.tmp.resize((size_t)cw * ch);
+    const int nb = bands(true);
+    c.band.resize(nb), c.lo.assign(nb, ch), c.hi.assign(nb, -1);
     const double sec = seconds(t);
     Axis ax, ay;
     axis(waves_, true, Caustics::kPX, Caustics::kSpacing, pw, sec, ax);
     axis(waves_, false, Caustics::kPY, Caustics::kSpacing, ph, sec, ay);
-    inBands(ph, true, [&](int from, int to) {
+    inBandsNumbered(ph, true, [&](int b, int from, int to) {
+        int lo = ch, hi = -1;   // the map's rows this band's photons reach
         for (int j = from; j < to; j++)
             for (int i = 0; i < pw; i++) {
                 const float x = Caustics::kPX + i * Caustics::kSpacing, y = Caustics::kPY + j * Caustics::kSpacing;
@@ -374,34 +448,53 @@ void Pool::causticsPass(float t, const std::vector<Drop>& drops) {
                 waveShift(waves_, ax, i, ay, j, ripples_, du, dv);
                 const size_t k = (size_t)j * pw + i;
                 c.pu[k] = q.u / 4096 + du, c.pv[k] = q.v / 4096 + dv;
+                const float fy = (c.pv[k] - Caustics::kCY) / Caustics::kCell - 0.5f;
+                if (fy >= 0 && fy < ch - 1) lo = std::min(lo, (int)fy), hi = std::max(hi, (int)fy + 1);
             }
+        // each photon between its four nearest cells; at rest a cell gets 4
+        std::vector<float>& bm = c.band[b];
+        bm.resize((size_t)cw * ch);
+        if (hi < lo) return;
+        std::fill(bm.begin() + (size_t)lo * cw, bm.begin() + (size_t)(hi + 1) * cw, 0.0f);
+        c.lo[b] = lo, c.hi[b] = hi;
+        float* m = bm.data();
+        for (size_t k = (size_t)from * pw; k < (size_t)to * pw; k++) {
+            const float fx = (c.pu[k] - Caustics::kCX) / Caustics::kCell - 0.5f;
+            const float fy = (c.pv[k] - Caustics::kCY) / Caustics::kCell - 0.5f;
+            if (!(fx >= 0 && fx < cw - 1 && fy >= 0 && fy < ch - 1)) continue;
+            const int x = (int)fx, y = (int)fy;
+            const float ax1 = fx - x, ay1 = fy - y, ax0 = 1 - ax1, ay0 = 1 - ay1;
+            float* p = m + (size_t)y * cw + x;
+            p[0] += ax0 * ay0, p[1] += ax1 * ay0, p[cw] += ax0 * ay1, p[cw + 1] += ax1 * ay1;
+        }
     });
-    // each photon between its four nearest cells; at rest a cell gets 4
+    // the bands' maps summed, and the sun's disc: [1 2 1] across, then
+    // down; and from photons to light
     float* m = c.map.data();
-    for (size_t k = 0; k < c.pu.size(); k++) {
-        const float fx = (c.pu[k] - Caustics::kCX) / Caustics::kCell - 0.5f;
-        const float fy = (c.pv[k] - Caustics::kCY) / Caustics::kCell - 0.5f;
-        if (!(fx >= 0 && fx < cw - 1 && fy >= 0 && fy < ch - 1)) continue;
-        const int x = (int)fx, y = (int)fy;
-        const float ax1 = fx - x, ay1 = fy - y, ax0 = 1 - ax1, ay0 = 1 - ay1;
-        float* p = m + (size_t)y * cw + x;
-        p[0] += ax0 * ay0, p[1] += ax1 * ay0, p[cw] += ax0 * ay1, p[cw + 1] += ax1 * ay1;
-    }
-    // the sun's disc: [1 2 1] across, then down; and from photons to light
-    constexpr float kNorm = Caustics::kSpacing * Caustics::kSpacing / (Caustics::kCell * Caustics::kCell);
     float* q = c.tmp.data();
-    for (int y = 0; y < ch; y++) {
-        const float* r = m + (size_t)y * cw;
-        float* o = q + (size_t)y * cw;
-        for (int x = 0; x < cw; x++)
-            o[x] = (r[std::max(x - 1, 0)] + 2 * r[x] + r[std::min(x + 1, cw - 1)]) * 0.25f;
-    }
-    for (int y = 0; y < ch; y++) {
-        const float *a = q + (size_t)std::max(y - 1, 0) * cw, *b = q + (size_t)y * cw,
-                    *d = q + (size_t)std::min(y + 1, ch - 1) * cw;
-        float* o = m + (size_t)y * cw;
-        for (int x = 0; x < cw; x++) o[x] = (a[x] + 2 * b[x] + d[x]) * (0.25f * kNorm);
-    }
+    inBands(ch, true, [&](int from, int to) {
+        for (int y = from; y < to; y++) {
+            float* r = m + (size_t)y * cw;
+            std::fill(r, r + cw, 0.0f);
+            for (int b = 0; b < nb; b++)
+                if (y >= c.lo[b] && y <= c.hi[b]) {
+                    const float* s = c.band[b].data() + (size_t)y * cw;
+                    for (int x = 0; x < cw; x++) r[x] += s[x];
+                }
+            float* o = q + (size_t)y * cw;
+            for (int x = 0; x < cw; x++)
+                o[x] = (r[std::max(x - 1, 0)] + 2 * r[x] + r[std::min(x + 1, cw - 1)]) * 0.25f;
+        }
+    });
+    constexpr float kNorm = Caustics::kSpacing * Caustics::kSpacing / (Caustics::kCell * Caustics::kCell);
+    inBands(ch, true, [&](int from, int to) {
+        for (int y = from; y < to; y++) {
+            const float *a = q + (size_t)std::max(y - 1, 0) * cw, *b = q + (size_t)y * cw,
+                        *d = q + (size_t)std::min(y + 1, ch - 1) * cw;
+            float* o = m + (size_t)y * cw;
+            for (int x = 0; x < cw; x++) o[x] = (a[x] + 2 * b[x] + d[x]) * (0.25f * kNorm);
+        }
+    });
     c.on = true;
 }
 
