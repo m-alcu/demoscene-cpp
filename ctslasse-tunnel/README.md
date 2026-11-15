@@ -15,8 +15,8 @@ is drawn in 32-bit colour at 1280x800 (`--res WxH` for another size);
 
 It is cut out of the [ctslasse](../ctslasse/) port, and the whole of part 8
 is in it. Every frame depends only on the time, so it can start anywhere.
-The routines are translated one by one, keeping the order of every x87
-operation. **All 3435 frames of the part are identical to the original's**
+The routines are translated one by one into C++ expressions, keeping the
+order of every x87 operation (see [Floating point](#floating-point)). **All 3435 frames of the part are identical to the original's**
 with the intro's texture (`--logo`): the screen, the DAC and the grid (see
 Verification).
 
@@ -178,9 +178,29 @@ parameters are recorded as the routines are called (`Tunnel::info()`).
 
 ### Floating point
 
-As in the port: the x87 at 80 bits, with the transcendentals computed as
-the harness's CPU (QEMU) computes them (`src/x87.h`). Build with
-`-ffp-contract=off`, as CMakeLists does.
+The intro's arithmetic is the x87's: 80 bits, rounding to nearest. The
+code writes it as expressions in `long double`, which is that format with
+GCC or Clang on x86. Each expression is evaluated in the intro's order and
+rounded to float or double wherever the intro stores a value. Elsewhere
+(MSVC, ARM) `long double` is another format and the build stops with a
+`static_assert`.
+
+The x87 instructions become `<cmath>`: FSQRT `std::sqrt`, FSIN and FCOS
+`std::sin` and `std::cos`, FPATAN `std::atan2`, all in long double;
+FRNDINT `std::nearbyint`, FRNDINT + FISTP `std::lrint`. The light tables'
+e^x (FLDL2E, FPREM, F2XM1, FSCALE, as Watcom compiles it) is `std::exp`.
+The intro's constants are written as literals where they are used (it
+reads them from its data, as floats or doubles; each literal is that
+value). The emulator the reference was logged under (QEMU) computes FSIN,
+FCOS, FPATAN and F2XM1 through doubles instead, so they can differ in the
+last bits. Here those differences never reach the results: the test gets
+the same texture, light tables, screen, DAC and grid on every frame. Build
+with `-ffp-contract=off`, as CMakeLists does.
+
+The grid mapper is the intro's integer routine (its 16.16 sums split
+between registers and joined by ADD/ADC) written in doubles, as in
+ctslasse-pond: every value is a multiple of 1/65536 of a few hundred at
+most, which a double holds exactly, so the pixels are the same.
 
 ## Verification
 

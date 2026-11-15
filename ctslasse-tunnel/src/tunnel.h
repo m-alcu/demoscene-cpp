@@ -6,18 +6,27 @@
 //
 // The picture is a 41x26 grid of points (texture u, v and a light level),
 // drawn by the intro's grid mapper in 8x8 blocks over 320x200. Translated
-// from the ctslasse port routine by routine, x87 order kept; every frame of
-// the part matches the original (tests/ref.txt). The whole part is here
+// from the ctslasse port routine by routine, into C++ expressions with the
+// order of the intro's x87 operations kept; every frame of the part matches
+// the original (tests/ref.txt). The whole part is here
 // (from T 0, the drops of ctslasse-pond); each frame depends on the time
 // only, so any T can be drawn on its own.
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
-#include "x87.h"
-
 namespace tunnel {
+
+// The intro's floating point is the x87's: 80 bits, rounding to nearest.
+// That is long double with GCC or Clang on x86; the code evaluates its
+// expressions in it, in the intro's order, rounded to float or double where
+// the intro stores a value. Elsewhere the picture would not be exact.
+using X = long double;
+static_assert(std::numeric_limits<X>::digits == 64,
+              "long double must be the x87's 80-bit format (GCC or Clang on x86) for the exact picture");
 
 constexpr int W = 320, H = 200;
 constexpr double kPit = 1193182.0;
@@ -40,11 +49,12 @@ public:
     static float partTime(int32_t clock) { return (float)((double)clock / kUnit); }
     bool fadeOut = true;            // false: no fade over T 68-72 (it runs on)
 
-    const uint8_t* screen() const { return mem_ + kScreen; }  // 320x200
+    const uint8_t* screen() const { return screen_.data(); }  // 320x200
     const uint8_t* dac() const { return dac_; }                // 256 RGB, 6-bit
-    const uint8_t* texture() const { return mem_ + kTex; }      // with the logo: the intro's [2B4C0h] + 130000h
-    const uint8_t* lightTable() const { return mem_ + kLight; } // 130 x 256
-    const uint8_t* grid() const { return mem_ + kGrid; }        // 41 x 26 x (u, v, light), 3198 dwords
+    const uint8_t* texture() const { return tex_.data(); }      // 256x256; with the logo: the intro's [2B4C0h] + 130000h
+    const uint8_t* lightTable() const { return light_.data(); } // 130 x 256: level x texel
+    // the grid as the intro holds it: 41 x 26 x (u, v, light), 3198 dwords
+    const uint8_t* grid() const { return reinterpret_cast<const uint8_t*>(grid_.data()); }
     // the picture in 256 colours, as the intro shows it (the screen through the DAC)
     void toArgb(uint32_t* out) const;
     // The same frame in 32-bit colour, at any size (WxH, shown at 4:3 as
@@ -69,17 +79,21 @@ public:
     static constexpr int kGridW = 41, kGridH = 26;
 
 private:
-    // the flat memory: the grid mapper's variables (1E500h-1E57Fh), the two
-    // grids (+31F8h the plane's), the texture and light tables (64K-aligned:
-    // the mapper puts their base in a register's high half), the screen
-    static constexpr uint32_t kGrid = 0x100, kTex = 0x10000, kLight = 0x20000, kScreen = 0x30000;
+    // A point of the grid: the texture's u and v (texels) and the light
+    // level, in 8.24 fixed point (u and v wrap at 256 texels). The routines
+    // leave them in 16.16, and they are then multiplied by 4096.
+    struct Point {
+        uint32_t u, v, light;
+    };
+    static_assert(sizeof(Point) == 12, "the intro's layout");
+    using Grid = std::array<Point, kGridW * kGridH>;
 
     void precalc(bool logo);        // the texture, as 18A6Ch makes [2B4C0h] + 130000h
     void lightTables();             // part 8's set-up
-    void plasma(uint32_t seed, uint8_t* t, uint32_t amp, uint32_t bits);
+    static void plasma(uint32_t seed, uint8_t* t, uint32_t amp, uint32_t bits);
     static void blur(const uint8_t* src, uint8_t* dst);
-    static void displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const uint8_t* tx,
-                         const uint8_t* ty);
+    static void displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const int8_t* tx,
+                         const int8_t* ty);
     static void rle(uint8_t* dst, const uint8_t* data, int c1, int c2);
     static void gradient(uint8_t* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                          int32_t n);
@@ -87,30 +101,20 @@ private:
     static void gradient(float* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1, int32_t g1, int32_t b1,
                          int32_t n);
 
-    // grid.cpp: the port's routines
     void update(int32_t clock);     // frame() without drawing: the grid and the DAC
-    void gridMap(uint32_t dst, uint32_t grid, uint32_t tex, uint32_t light);
-    void ease(float x);
-    void cosPos(float x);
-    void tunnel(uint32_t grid, float p1, float p2, float p3, int32_t p4, int32_t p5, float p6);
-    void blend(uint32_t dst, uint32_t a, uint32_t b, int32_t wa, int32_t wb);
-    void bubbles(uint32_t grid, float t);
-    void wobble(uint32_t grid, float t);
+    // grid.cpp: the intro's routines
+    void gridMap();                 // the grid onto the screen
+    // into the grid: a tunnel (twist, zoom, phase, turn, depth, wave)
+    void tunnel(float twist, float zoom, float phase, int32_t u0, int32_t v0, float wave);
+    void bubbles(float t);          // the drops, into the grid
+    void wobble(float t);           // the plane, into plane_
+    void blend(int32_t wa, int32_t wb);   // grid = grid wa + plane wb
 
     enum { kPal1, kPal2, kPal3 };   // red - yellow - blue, black - blue - white, black - white
     void setDac(int src, int32_t k, int mix, int mode);
 
-    uint8_t r8(uint32_t a) const { return mem_[a]; }
-    uint32_t r32(uint32_t a) const;
-    void w8(uint32_t a, uint32_t v) { mem_[a] = (uint8_t)v; }
-    void w16(uint32_t a, uint32_t v);
-    void w32(uint32_t a, uint32_t v);
-    static double f64(uint32_t a);  // the intro's constants, by address
-    static float f32(uint32_t a);
-
-    Fpu F;
-    std::vector<uint8_t> memory_;
-    uint8_t* mem_;
+    Grid grid_{}, plane_{};
+    std::vector<uint8_t> tex_, light_, screen_;
     uint8_t pal_[3][768], dac_[768];
     float palF_[3][768], dacF_[768];    // the same, unrounded (6-bit scale, 0-63)
     Info info_;

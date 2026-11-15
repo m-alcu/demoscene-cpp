@@ -31,31 +31,6 @@ void inBands(int h, bool threaded, const Rows& rows) {
 
 }  // namespace
 
-double Tunnel::f64(uint32_t a) {
-    double v;
-    std::memcpy(&v, kConst + (a - 0x28C00), 8);
-    return v;
-}
-
-float Tunnel::f32(uint32_t a) {
-    float v;
-    std::memcpy(&v, kConst + (a - 0x28C00), 4);
-    return v;
-}
-
-uint32_t Tunnel::r32(uint32_t a) const {
-    uint32_t v;
-    std::memcpy(&v, mem_ + a, 4);
-    return v;
-}
-
-void Tunnel::w16(uint32_t a, uint32_t v) {
-    const uint16_t h = (uint16_t)v;
-    std::memcpy(mem_ + a, &h, 2);
-}
-
-void Tunnel::w32(uint32_t a, uint32_t v) { std::memcpy(mem_ + a, &v, 4); }
-
 // --- the texture --------------------------------------------------------------------------
 
 // 16DCAh: a diamond-square fractal over the tile: values 0..2^BITS-1, the
@@ -106,10 +81,10 @@ void Tunnel::rle(uint8_t* dst, const uint8_t* data, int c1, int c2) {
 
 // 16E81h: D = B, each pixel moved by TX[S] across and TY[A] down (S may be D:
 // each pixel is read before it is written)
-void Tunnel::displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const uint8_t* tx,
-                    const uint8_t* ty) {
+void Tunnel::displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint8_t* d, const int8_t* tx,
+                      const int8_t* ty) {
     for (uint32_t k = 0; k < 0x10000; k++) {
-        const uint8_t dx = tx[s[k]], dy = ty[a[k]];
+        const int dx = tx[s[k]], dy = ty[a[k]];
         d[k] = b[(((k >> 8) + dy) & 0xFF) << 8 | ((k + dx) & 0xFF)];
     }
 }
@@ -121,27 +96,22 @@ void Tunnel::displace(const uint8_t* a, const uint8_t* b, const uint8_t* s, uint
 void Tunnel::precalc(bool logo) {
     std::vector<uint8_t> t(0x30000);
     uint8_t *t0 = t.data(), *t1 = t0 + 0x10000, *t2 = t0 + 0x20000;
-    uint8_t tx[256], ty[256];
+    // 18EAFh, 18F6Fh: the warp's tables, sin and cos of i/20 radians, by AMP
+    int8_t tx[256], ty[256];
+    auto warp = [&](double amp) {
+        for (int i = 0; i < 256; i++) {
+            const X a = X(i) * 0.05;
+            tx[i] = (int8_t)std::lrint(std::sin(a) * -amp);
+            ty[i] = (int8_t)std::lrint(std::cos(a) * amp);
+        }
+    };
     plasma(0x12345678, t0, 0x2710, 8);
     plasma(0x4D3, t1, 0x64, 8);
     plasma(0x477, t2, 0x190, 8);
-    for (int32_t i = 0; i < 0x100; i++) {   // 18EAFh
-        F.fld((X)i);
-        const double di = F.fstd();
-        F.fmul(f64(0x28D20));
-        F.fsin();
-        F.fmul(f64(0x28D28));
-        F.fld(di), F.fmul(f64(0x28D20));
-        F.fxch();
-        F.frndint();
-        tx[i] = (uint8_t)F.fistp();
-        F.fcos();
-        F.fmul(f64(0x28D30));
-        F.frndint();
-        ty[i] = (uint8_t)F.fistp();
-    }
+    warp(70.0);
+    tex_.resize(0x10000);
     if (!logo) {
-        displace(t2, t0, t1, mem_ + kTex, tx, ty);
+        displace(t2, t0, t1, tex_.data(), tx, ty);
         return;
     }
     displace(t2, t0, t1, t1, tx, ty);
@@ -150,47 +120,23 @@ void Tunnel::precalc(bool logo) {
     blur(t0, t2);
     blur(t2, t0);
     blur(t0, t2);
-    for (int32_t i = 0; i < 0x100; i++) {   // 18F6Fh
-        F.fld((X)i);
-        const double di = F.fstd();
-        F.fmul(f64(0x28D20));
-        F.fsin();
-        F.fmul(f64(0x28D38));
-        F.fld(di), F.fmul(f64(0x28D20));
-        F.fxch();
-        F.frndint();
-        tx[i] = (uint8_t)F.fistp();
-        F.fcos();
-        F.fmul(f64(0x28D40));
-        F.frndint();
-        ty[i] = (uint8_t)F.fistp();
-    }
-    displace(t2, t1, t2, mem_ + kTex, tx, ty);
+    warp(10.0);
+    displace(t2, t1, t2, tex_.data(), tx, ty);
 }
 
-// Part 8's light tables, 65 levels of 256 (1C7C0h): level L maps a texel J
-// to J f + 128 (1 - f), f = e^(1.5 - (64 - L)/13) - 0.02 at most 1 (1 from L 45): low levels
-// greyed. Then 65 more (+4100h) for the highlights: J + row (255 - J) / 64,
-// towards white.
+// Part 8's light tables, 130 rows of 256 (1C7C0h), one per light level L:
+// - 0-64 map a texel J to J f + 128 (1 - f), f = e^(1.5 - (64 - L)/13) - 0.02,
+//   at most 1 (1 from L 45): the low levels fogged towards index 128;
+// - 65-129, the highlights: J + (L - 65)(255 - J) / 64, towards white.
+// (Rows above 129 are never reached; they are left at 0.)
 void Tunnel::lightTables() {
-    const uint32_t light = kLight;
-    int32_t lvl = 0x40, acc = 0;
-    for (int32_t row = 0; row <= 0x40; row++, lvl--, acc += 0xFF) {
-        const int32_t step = -row;
-        F.fld((X)lvl), F.fmul(f64(0x29444)), F.fsubr(f64(0x294B8));
-        F.fldl2e(), F.fmulp();
-        F.exp2();
-        F.fadd(f64(0x294F8));
-        F.fld1();
-        F.fxch();
-        float f = F.fstpf();
-        if (F.fcomp(f).jb()) f = 1.0f;
-        int32_t s = acc;
-        for (int32_t j = 0; j < 0x100; j++, s += step) {
-            F.fld(f), F.fld((X)j), F.fmulst(1), F.fld1(), F.fsubrp(2), F.fxch(), F.fmul(f32(0x29440)), F.faddp();
-            F.frndint();
-            w8(light + row * 0x100 + j, (uint32_t)F.fistp());
-            w8(light + 0x4100 + row * 0x100 + j, (uint32_t)(s / 64 + j));
+    light_.assign(0x10000, 0);
+    for (int32_t row = 0; row <= 0x40; row++) {
+        float f = (float)(std::exp(1.5 - X(0x40 - row) * 0.07692307692307693) + -0.02);
+        if (1 < f) f = 1.0f;
+        for (int32_t j = 0; j < 0x100; j++) {
+            light_[row * 0x100 + j] = (uint8_t)std::lrint(X(j) * f + (1 - X(f)) * 128.0f);
+            light_[(0x41 + row) * 0x100 + j] = (uint8_t)(row * (0xFF - j) / 64 + j);
         }
     }
 }
@@ -215,7 +161,7 @@ void Tunnel::gradient(float* dst, int32_t r0, int32_t g0, int32_t b0, int32_t r1
     }
 }
 
-Tunnel::Tunnel(bool logo) : memory_(0x40000, 0), mem_(memory_.data()) {
+Tunnel::Tunnel(bool logo) : screen_(W * H, 0) {
     precalc(logo);
     lightTables();
     // pal1: green-grey - purple - light blue - black - red - yellow;
@@ -266,17 +212,15 @@ void Tunnel::setDac(int src, int32_t k, int mix, int mode) {
 
 void Tunnel::frame(int32_t clock) {
     update(clock);
-    gridMap(kScreen, kGrid, kTex, kLight);
+    gridMap();
 }
 
 void Tunnel::morph(int32_t clock, int32_t clockTo, float w) {
     // each frame on its own: the DAC as it stands at its time (the intro
     // writes it only while it changes)
-    constexpr int n = 0xC7E;
     dacSet_ = false;
     update(clockTo);
-    uint32_t to[n];
-    std::memcpy(to, mem_ + kGrid, sizeof to);
+    const Grid to = grid_;
     uint8_t dac[768];
     float dacF[768];
     std::memcpy(dac, dac_, sizeof dac), std::memcpy(dacF, dacF_, sizeof dacF);
@@ -284,29 +228,40 @@ void Tunnel::morph(int32_t clock, int32_t clockTo, float w) {
     dacSet_ = false;
     update(clock);
     const int64_t k = std::lround(std::clamp(w, 0.0f, 1.0f) * 4096);
-    for (int i = 0; i < n; i++) {
-        const uint32_t a = r32(kGrid + 4 * i);
-        // u and v: by their difference, wrapped (8.24: 2^32 is 256 texels); the light as it is
-        const int64_t d = i % 3 == 2 ? (int64_t)to[i] - a : (int64_t)(int32_t)(to[i] - a);
-        w32(kGrid + 4 * i, (uint32_t)((int64_t)a + d * k / 4096));
+    // u and v by their difference, wrapped (8.24: 2^32 is 256 texels); the light as it is
+    auto wrapped = [&](uint32_t a, uint32_t b) { return (uint32_t)(a + (int64_t)(int32_t)(b - a) * k / 4096); };
+    for (size_t i = 0; i < grid_.size(); i++) {
+        Point& p = grid_[i];
+        p.u = wrapped(p.u, to[i].u), p.v = wrapped(p.v, to[i].v);
+        p.light = (uint32_t)(p.light + ((int64_t)to[i].light - p.light) * k / 4096);
     }
     for (int i = 0; i < 768; i++) {
         dac_[i] = (uint8_t)((dac_[i] * (4096 - k) + dac[i] * k + 2048) >> 12);
         dacF_[i] += (dacF[i] - dacF_[i]) * (float)k / 4096;
     }
     info_.morph = (float)k / 4096, info_.morphTo = tTo;
-    gridMap(kScreen, kGrid, kTex, kLight);
+    gridMap();
 }
 
+namespace {
+
+// 1C706h: an ease, (1 - cos(pi x)) / 2, X held to 0-1
+X ease(float x) {
+    if (0 > x) x = 0;
+    if (1 < x) x = 1.0f;
+    return (1 - std::cos(X(x) * 3.141592653589793)) * 0.5;
+}
+
+}  // namespace
+
+// 1C776h: part 8 at CLOCK. T, in the part's unit, is float, as the intro
+// keeps it; each value is computed in long double in the intro's order and
+// rounded where the intro stores it.
 void Tunnel::update(int32_t clock) {
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    auto Fl = [&](uint32_t a) { return (X)f32(a); };
-    auto cmpF = [&](float v, uint32_t c) { F.fld(v); return F.fcomp(f32(c)); };
-    const uint32_t grid = kGrid, grid2 = kGrid + 0x31F8;
-    F.fld((X)clock);
-    F.fdiv(D(0x29500));
-    const float T = F.fstf();
-    const double dT = F.fstd();
+    constexpr double pi = 3.141592653589793;
+    const X t80 = X(clock) / 813440.2376280001;
+    const float T = (float)t80;
+    const double dT = (double)t80;
     // back in time (a loop, a seek), or the fade-out skipped: the palette as
     // it stands at T (the intro writes it only while it changes)
     if (T < lastT_ || (!fadeOut && T > 68)) dacSet_ = false;
@@ -322,170 +277,76 @@ void Tunnel::update(int32_t clock) {
         }
         dacSet_ = true;
     }
-    // the palettes
-    if (F.fcomp(D(0x294EC)).jb()) {
-        F.fld(T), F.fmul(Fl(0x29454)), F.fmul(Fl(0x29458));
-        F.frndint();
-        setDac(kPal3, F.fistp(), -1, 0);
-    } else if (F.fld(dT), F.fcomp(D(0x294B8)).jb()) {
-        F.fld(dT), F.fadd(D(0x2954C)), F.fmul(D(0x2944C));
-        F.frndint();
-        setDac(kPal2, F.fistp(), kPal3, 1);
-    }
-    if (cmpF(T, 0x294C0).ja() && cmpF(T, 0x29508).jb()) {
-        F.fld(T), F.fadd(Fl(0x2950C)), F.fmul(Fl(0x2945C));
-        F.frndint();
-        setDac(kPal1, F.fistp(), kPal2, 1);
-    }
-    if (fadeOut && cmpF(T, 0x29510).ja()) {
-        F.fld(Fl(0x29554)), F.fsub(T), F.fmul(Fl(0x2945C));
-        F.frndint();
-        setDac(kPal1, F.fistp(), -1, 2);
-    }
-    if (cmpF(T, 0x29514).jb()) {
-        if (cmpF(T, 0x29508).jb()) bubbles(grid, T);
-        if (cmpF(T, 0x294C0).ja() && cmpF(T, 0x29514).jb()) wobble(grid, T);
-        if (cmpF(T, 0x29548).ja()) {
-            F.fld(T), F.fadd(Fl(0x29518)), F.fmul(Fl(0x29460));
-            F.fldst(0), F.fmul(D(0x29464));
-            F.fxch(), F.fmul(Fl(0x2946C));
-            F.fxch();
-            F.frndint();
-            F.fxch();
-            F.frndint();
-            const int32_t p = F.fistp();
-            const int32_t q = F.fistp();
-            tunnel(grid, 5.0f, 500.0f, 0.0f, q, p, 0.0f);
+    // the palettes: in from white as greys (T 0-0.5), greys to blue
+    // (0.5-1.5), blue to red (8-12), out to black (68-72)
+    if (t80 < 0.5) setDac(kPal3, (int32_t)std::lrint(X(T) * 2.0f * 64.0f), -1, 0);
+    else if (dT < 1.5) setDac(kPal2, (int32_t)std::lrint((X(dT) + -0.5) * 64.0), kPal3, 1);
+    if (T > 8 && T < 12) setDac(kPal1, (int32_t)std::lrint((X(T) + -8.0f) * 16.0f), kPal2, 1);
+    if (fadeOut && T > 68) setDac(kPal1, (int32_t)std::lrint((X(72.0f) - T) * 16.0f), -1, 2);
+
+    if (T < 38) {
+        // the drops (to T 12), the plane (from T 8), the tunnel (from T 33)
+        if (T < 12) bubbles(T);
+        if (T > 8 && T < 38) wobble(T);
+        if (T > 33) {
+            const X a = (X(T) + -38.0f) * 4096.0f;
+            tunnel(5.0f, 500.0f, 0.0f, (int32_t)std::lrint(a * 23.1234), (int32_t)std::lrint(a * 70.0f), 0.0f);
         }
-        // grid = grid a + grid2 b, b rising (and falling back)
+        // grid = grid a + plane b: b rising with the plane (T 8-12), and
+        // falling as the tunnel comes in (T 33-38)
         float w = 0;
-        if (cmpF(T, 0x294C0).ja()) {
-            F.fld(T), F.fadd(Fl(0x2950C)), F.fmul(Fl(0x294A4)), F.fmul(D(0x29484)), F.fcos();
-            F.fld1(), F.fsubrp(1), F.fmul(D(0x294EC));
-            w = F.fstpf();
-        }
-        if (cmpF(T, 0x29508).ja()) w = 1.0f;
-        if (cmpF(T, 0x29548).ja() && cmpF(T, 0x29514).jb()) {
-            F.fld(T), F.fadd(Fl(0x295B8)), F.fmul(Fl(0x294F4)), F.fmul(D(0x29484)), F.fcos();
-            F.fld1(), F.faddp(), F.fmul(D(0x294EC));
-            w = F.fstpf();
-        }
-        if (F.fldz(), F.fcomp(w).ja()) w = 0;
-        if (F.fld1(), F.fcomp(w).jb()) w = 1.0f;
-        F.fld(Fl(0x29460));
-        F.fld(w), F.fmulst(1);
-        w = F.fstf();
-        F.frndint();
-        F.fxch(), F.fsub(w);
-        F.fxch();
-        const int32_t wb = F.fistp();
-        F.frndint();
-        const int32_t wa = F.fistp();
+        if (T > 8) w = (float)((1 - std::cos((X(T) + -8.0f) * 0.25f * pi)) * 0.5);
+        if (T > 12) w = 1.0f;
+        if (T > 33 && T < 38) w = (float)((std::cos((X(T) + -33.0f) * 0.2f * pi) + 1) * 0.5);
+        if (0 > w) w = 0;
+        if (1 < w) w = 1.0f;
+        w = (float)(X(w) * 4096.0f);
+        const int32_t wb = (int32_t)std::lrint(X(w)), wa = (int32_t)std::lrint(X(4096.0f) - w);
         info_.planeShare = wb / 4096.0f;
-        blend(grid, grid, grid2, wa, wb);
-    } else {
-        // the tunnel alone
-        F.fld(T), F.fldst(0), F.fldst(1);
-        F.fxch(), F.fadd(Fl(0x29518));
-        F.fxch(), F.fmul(Fl(0x29454));
-        F.fxch(), F.fmul(Fl(0x29460));
-        F.fldst(0), F.fmul(D(0x29464));
-        F.fxch(), F.fmul(Fl(0x2946C));
-        float zoom = 500.0f, twist = 1.0f, wave = 0;
-        F.fxch(2);
-        float phase = F.fstpf();
-        F.frndint();
-        F.fxch();
-        F.frndint();
-        F.fxch();
-        const int32_t q = F.fistp();
-        const int32_t p = F.fistp();
-        if (F.fcomp(Fl(0x29558)).ja()) {
-            F.fld(T), F.fadd(Fl(0x2955C)), F.fmul(Fl(0x29470));
-            ease(F.fstpf());
-            F.fmul(D(0x29474));
-            wave = F.fstpf();
-        }
-        if (cmpF(T, 0x29560).ja()) {
-            F.fld(T);
-            F.fld(Fl(0x294C4)), F.fsubst(1), F.fmul(D(0x2947C));
-            F.fldst(1);
-            F.fxch(2), F.fadd(Fl(0x29568));
-            F.fxch(2), F.fadd(Fl(0x29564));
-            F.fxch(2), F.fmul(D(0x29484));
-            F.fxch(2);
-            F.frndint();
-            twist = F.fstpf();
-            const double d8a = F.fstpd();
-            F.fcos(), F.fmul(d8a);
-            wave = F.fstpf();
-        }
-        if (cmpF(T, 0x2956C).ja()) {
-            F.fld(T), F.fadd(Fl(0x29570));
-            const float f7e = F.fstf();
-            F.fmul(Fl(0x29454));
-            ease(F.fstpf());
-            F.fmul(D(0x2948C)), F.fsubr(D(0x29574));
-            wave = F.fstpf();
-            ease(f7e);
-            F.fmul(f7e), F.fmul(Fl(0x29494)), F.fadd(phase);
-            twist = 5.0f;
-            phase = F.fstpf();
-        }
-        if (cmpF(T, 0x2957C).ja()) {
-            F.fld(T), F.fadd(Fl(0x2951C));
-            const float f7e = F.fstf();
-            F.fmul(Fl(0x29498));
-            ease(F.fstpf());
-            F.fmul(D(0x29474));
-            F.fld(f7e), F.fmul(D(0x29484));
-            F.fxch();
-            const double d8a = F.fstpd();
-            F.fsin(), F.fmul(d8a), F.fld1(), F.faddp(), F.fmul(D(0x2949C));
-            zoom = F.fstpf();
-        }
-        if (F.fld(T), F.fcomp(D(0x29580)).ja()) {
-            F.fld(T), F.fmul(Fl(0x29454));
-            twist = 3.0f;
-            const uint32_t w6 = 0x3F19999A;
-            std::memcpy(&wave, &w6, 4);
-            phase = F.fstpf();
-        }
-        if (cmpF(T, 0x29520).ja()) {
-            F.fld(Fl(0x29524)), F.fsub(T), F.fmul(Fl(0x294A4));
-            ease(F.fstpf());
-            F.fld(T), F.fadd(Fl(0x2951C));
-            F.fxch(), F.fmul(D(0x29474));
-            F.fxch(), F.fmul(D(0x29484));
-            F.fxch();
-            const double d8a = F.fstpd();
-            F.fsin(), F.fmul(d8a), F.fld1(), F.faddp(), F.fmul(D(0x2949C));
-            zoom = F.fstpf();
-        }
-        if (cmpF(T, 0x29524).ja()) {
-            F.fld(T), F.fadd(Fl(0x29528)), F.fmul(D(0x29484)), F.fcos();
-            F.fld(Fl(0x2952C)), F.fsub(T);
-            F.fxch(), F.fmul(D(0x294A8));
-            F.fxch(), F.fmul(Fl(0x294A4));
-            const float e = F.fstpf();
-            const double d8a = F.fstpd();
-            ease(e);
-            F.fmul(d8a);
-            wave = F.fstpf();
-        }
-        if (cmpF(T, 0x29530).ja()) {
-            F.fld(T), F.fadd(Fl(0x29588));
-            ease(F.fstpf());
-            F.fmul(D(0x294B0));
-            F.fld(T), F.fmul(D(0x294B8));
-            F.fxch();
-            const double d8a = F.fstpd();
-            F.fsin(), F.fmul(d8a), F.fld1(), F.faddp(), F.fmul(D(0x2949C));
-            zoom = F.fstpf();
-        }
-        tunnel(grid, twist, zoom, phase, q, p, wave);
-        for (uint32_t i = 0; i < 0xC7E; i++) w32(grid + 4 * i, r32(grid + 4 * i) << 12);
+        blend(wa, wb);
+        return;
     }
+    // the tunnel alone: its flight (u turning, v forward), then its twist,
+    // zoom, wave and phase, set by one span of T after another
+    const X a = (X(T) + -38.0f) * 4096.0f;
+    const int32_t u0 = (int32_t)std::lrint(a * 23.1234), v0 = (int32_t)std::lrint(a * 70.0f);
+    float zoom = 500.0f, twist = 1.0f, wave = 0;
+    float phase = (float)(X(T) * 2.0f);
+    if (T > 39) wave = (float)(ease((float)((X(T) + -39.0f) * 0.5f)) * 0.8);   // the walls start to wave
+    if (T > 42) {   // the twist steps up, the wave swings
+        twist = (float)std::nearbyint(X(T) + -41.0f);
+        const double d = (double)((50.0f - X(T)) * 0.1);
+        wave = (float)(std::cos((X(T) + -42.0f) * pi) * d);
+    }
+    if (T > 46) {   // twist 5, the wave eased down to 0.2, the phase spinning
+        const float s = (float)(X(T) + -46.0f);
+        wave = (float)(0.4 - ease((float)((X(T) + -46.0f) * 2.0f)) * 0.2);
+        twist = 5.0f;
+        phase = (float)(ease(s) * s * 3.0f + phase);
+    }
+    if (T > 48) {   // the zoom breathes
+        const float s = (float)(X(T) + -48.0f);
+        const double d = (double)(ease((float)((X(T) + -48.0f) * 0.125f)) * 0.8);
+        zoom = (float)((std::sin(X(s) * pi) * d + 1) * 500.0);
+    }
+    if (T > 55.5) {   // twist 3, wave 0.6, the phase at 2T
+        twist = 3.0f, wave = 0.6f;
+        phase = (float)(X(T) * 2.0f);
+    }
+    if (T > 56) {
+        const double d = (double)(ease((float)((60.0f - X(T)) * 0.25f)) * 0.8);
+        zoom = (float)((std::sin((X(T) + -48.0f) * pi) * d + 1) * 500.0);
+    }
+    if (T > 60) {   // the wave dies out, swinging
+        const double d = (double)(std::cos((X(T) + -60.0f) * pi) * 0.6);
+        wave = (float)(ease((float)((66.0f - X(T)) * 0.25f)) * d);
+    }
+    if (T > 62) {   // the zoom breathes at 1.5T, +-85%
+        const double d = (double)(ease((float)(X(T) + -62.0f)) * 0.85);
+        zoom = (float)((std::sin(X(T) * 1.5) * d + 1) * 500.0);
+    }
+    tunnel(twist, zoom, phase, u0, v0, wave);
+    for (Point& p : grid_) p.u <<= 12, p.v <<= 12, p.light <<= 12;
 }
 
 void Tunnel::toArgb(uint32_t* out) const {

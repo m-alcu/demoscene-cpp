@@ -1,367 +1,208 @@
-// Part 8's grid routines, translated from the ctslasse port as they are,
-// over this project's flat memory (Tunnel::mem_): the grid mapper (14DF4h)
-// with its variables at 1E500h moved to offsets 0-7Fh, the ease (1C706h),
-// the tunnel (1C5CBh), the drops (1CB2Bh), the wobbling plane (1CDF8h) and the grids' blend
-// (150BEh).
-#include <cstring>
+// Part 8's grid routines: the grid mapper (14DF4h), the tunnel (1C5CBh), the
+// drops (1CB2Bh), the wobbling plane (1CDF8h) and the grids' blend (150BEh).
+//
+// They give the intro's results bit for bit (tests/ref.txt). The floating
+// point is the x87's (see X in tunnel.h): each expression is evaluated in
+// long double, in the intro's order, and rounded to float or double where
+// the intro stores a value, or to the nearest integer (lrint) where it does
+// FRNDINT/FISTP.
+#include <algorithm>
+#include <cmath>
 
 #include "tunnel.h"
 
 namespace tunnel {
 
-// 14DF4h: the grid at GRID (41 points a row, 12 bytes each) over 40x25
-// blocks of 8x8 at DST (pitch 320), texels from TEX (256 wide) lit through
-// the table at LIGHT (256 x levels). Its variables are at 1E500h: some
-// read as dwords straddling two of them, some added to in memory, as the
-// original does; each pixel's texel lands in the low byte of the v sum.
-void Tunnel::gridMap(uint32_t dst, uint32_t grid, uint32_t tex, uint32_t light) {
-    auto R = [&](uint32_t a) { return r32(a); };
-    w32(0x74, dst), w32(0x70, grid), w32(0x6C, tex), w32(0x78, light);
-    uint32_t eax, ebx, ecx, edx, esi, edi, ebp, cf = 0;
-    auto add = [&](uint32_t& r, uint32_t v) {
-        const uint64_t s = (uint64_t)r + v;
-        r = (uint32_t)s, cf = (uint32_t)(s >> 32);
+namespace {
+
+// 1C746h: max(cos A, 0), as a float
+float cosPos(float a) {
+    const float c = (float)std::cos(X(a));
+    return 0 > c ? 0.0f : c;
+}
+
+}  // namespace
+
+// The grid over 40x25 blocks of 8x8 pixels. In each block, u, v and the
+// light level are interpolated bilinearly from the four corners: down the
+// left edge row by row, then across each row pixel by pixel. A pixel is
+// light[L][tex[v][u]], each taken at its whole part: the texture wraps at
+// 256 texels, and the level L picks the light table's row.
+//
+// In texels and levels, as doubles. The intro's mapper works to 1/65536:
+// the corners are cut down to that, and so are the steps (each a corner's
+// difference divided by 8, rounded down), and the step across changes each
+// row by 1/8 of the difference between the bottom and top edges' steps
+// (rounded down too). These are all multiples of 1/65536 of a few hundred
+// at most, which a double holds exactly (a float's 24 bits would not), so
+// the sums are the intro's to the bit.
+void Tunnel::gridMap() {
+    struct Uvl {
+        double u, v, l;
+        Uvl& operator+=(const Uvl& o) { return u += o.u, v += o.v, l += o.l, *this; }
     };
-    auto adcLo = [&](uint32_t& r, uint32_t v) {     // adc on the low byte
-        const uint32_t s = (r & 0xFF) + (v & 0xFF) + cf;
-        r = (r & ~0xFFu) | (s & 0xFF), cf = s >> 8;
+    constexpr double kFrac = 65536.0;                                       // the mapper's precision
+    auto cut = [](double x) { return std::floor(x * kFrac) / kFrac; };      // down to a multiple of 1/65536
+    auto value = [](uint32_t x) { return x / 16777216.0; };                 // the grid's 8.24: 0-256
+    // b - a, the shorter way round the 256 (as the grid's values wrap)
+    auto diff = [&](uint32_t a, uint32_t b) { return (int32_t)(b - a) / 16777216.0; };
+    auto step = [&](const Point& a, const Point& b) {   // (b - a) / 8
+        return Uvl{cut(diff(a.u, b.u) / 8), cut(diff(a.v, b.v) / 8), cut(diff(a.light, b.light) / 8)};
     };
-    auto adcHi = [&](uint32_t& r, uint32_t v) {     // adc on byte 1
-        const uint32_t s = ((r >> 8) & 0xFF) + (v & 0xFF) + cf;
-        r = (r & ~0xFF00u) | (s & 0xFF) << 8, cf = s >> 8;
-    };
-    auto setLo = [](uint32_t& r, uint32_t v) { r = (r & ~0xFFu) | (v & 0xFF); };
-    auto setHi = [](uint32_t& r, uint32_t v) { r = (r & ~0xFF00u) | (v & 0xFF) << 8; };
-    for (w32(0x64, 0x19); r32(0x64); w32(0x64, r32(0x64) - 1)) {
-        for (w32(0x68, 0x28); r32(0x68); w32(0x68, r32(0x68) - 1)) {
-            esi = R(0x70);
-            eax = (uint32_t)((int32_t)(R(esi + 0x0C) - R(esi)) >> 11);
-            ebx = (uint32_t)((int32_t)(R(esi + 0x10) - R(esi + 4)) >> 11);
-            edi = (uint32_t)((int32_t)(R(esi + 0x14) - R(esi + 8)) >> 11);
-            w32(0x08, eax), w32(0x10, ebx), w32(0x18, edi);
-            ecx = (uint32_t)((int32_t)(R(esi + 0x1EC) - R(esi)) >> 11);
-            edx = (uint32_t)((int32_t)(R(esi + 0x1F0) - R(esi + 4)) >> 11);
-            ebp = (uint32_t)((int32_t)(R(esi + 0x1F4) - R(esi + 8)) >> 11);
-            w32(0x20, ecx), w32(0x28, edx), w32(0x30, ebp);
-            ecx = (uint32_t)((int32_t)(R(esi + 0x1F8) - R(esi + 0x1EC)) >> 11);
-            edx = (uint32_t)((int32_t)(R(esi + 0x1FC) - R(esi + 0x1F0)) >> 11);
-            ebp = (uint32_t)((int32_t)(R(esi + 0x200) - R(esi + 0x1F4)) >> 11);
-            w32(0x38, (uint32_t)((int32_t)(ecx - eax) >> 3));
-            w32(0x40, (uint32_t)((int32_t)(edx - ebx) >> 3));
-            w32(0x48, (uint32_t)((int32_t)(ebp - edi) >> 3));
-            ecx = R(0x78), ebx = R(0x6C), edi = R(0x74);
-            setLo(ebx, r8(esi + 3));
-            edx = R(esi - 1);
-            setHi(ebx, r8(esi + 7));
-            eax = R(esi + 3);
-            setHi(ecx, r8(esi + 0x0B));
-            esi = R(esi + 7);
-            ebp = R(0x0E);
-            setLo(edx, r8(0x0A));
-            setHi(edx, r8(0x12));
-            for (w32(0x60, 8); r32(0x60); w32(0x60, r32(0x60) - 1)) {
-                w32(0x54, eax), w32(0x50, edx), w32(0x58, ecx), w32(0x5C, esi);
-                w32(0x4C, ebx);
-                auto chain = [&]() {
-                    add(edx, R(0x06)), adcLo(ebx, edx);
-                    add(eax, ebp), adcHi(ebx, edx >> 8);
-                    add(esi, R(0x16)), adcHi(ecx, r8(0x1A));
-                };
-                for (int k = 0; k < 4; k++) {
-                    setLo(ecx, r8(ebx));
-                    setLo(eax, r8(ecx));
-                    chain();
-                    setLo(ecx, r8(ebx));
-                    setHi(eax, r8(ecx));
-                    if (k < 3) chain();
-                    w16(edi + 2 * k, eax);
+    auto whole = [](double x) { return (int)std::floor(x) & 0xFF; };     // the integer part, modulo 256
+    const uint8_t* tex = tex_.data();
+    const uint8_t* light = light_.data();
+    for (int by = 0; by < 25; by++)
+        for (int bx = 0; bx < 40; bx++) {
+            const Point& p00 = grid_[by * kGridW + bx];
+            const Point& p10 = (&p00)[1];
+            const Point& p01 = (&p00)[kGridW];
+            const Point& p11 = (&p00)[kGridW + 1];
+            Uvl across = step(p00, p10);              // per pixel along the row
+            const Uvl down = step(p00, p01);          // the left edge, per row
+            const Uvl bottom = step(p01, p11);
+            const Uvl turn = {cut((bottom.u - across.u) / 8), cut((bottom.v - across.v) / 8),
+                              cut((bottom.l - across.l) / 8)};   // the step across, per row
+            Uvl left = {cut(value(p00.u)), cut(value(p00.v)), cut(value(p00.light))};
+            uint8_t* row = screen_.data() + by * 8 * W + bx * 8;
+            for (int y = 0; y < 8; y++, row += W) {
+                Uvl q = left;
+                for (int x = 0; x < 8; x++) {
+                    row[x] = light[whole(q.l) << 8 | tex[whole(q.v) << 8 | whole(q.u)]];
+                    q += across;
                 }
-                edx = R(0x50), eax = R(0x54), ecx = R(0x58), esi = R(0x5C);
-                edi += 0x140;
-                ebx = R(0x36);
-                {
-                    uint32_t v = R(0x06);
-                    add(v, ebx);
-                    w32(0x06, v);
-                }
-                adcLo(edx, r8(0x3A));
-                add(ebp, R(0x3E)), adcHi(edx, r8(0x42));
-                ebx = R(0x48);
-                w32(0x18, R(0x18) + ebx);
-                ebx = R(0x4C);
-                add(edx, R(0x1E)), adcLo(ebx, r8(0x22));
-                add(eax, R(0x26)), adcHi(ebx, r8(0x2A));
-                add(esi, R(0x2E)), adcHi(ecx, r8(0x32));
+                left += down;
+                across += turn;
             }
-            w32(0x70, R(0x70) + 0x0C);
-            w32(0x74, R(0x74) + 8);
         }
-        w32(0x70, R(0x70) + 0x0C);
-        w32(0x74, R(0x74) + 0x8C0);
-    }
 }
 
-// 1C706h: an ease: (1 - cos(clamp(X, 0, 1) * k)) * k2
-void Tunnel::ease(float x) {
-    if (F.fldz(), F.fcomp(x).ja()) x = 0;
-    if (F.fld1(), F.fcomp(x).jb()) x = 1.0f;
-    F.fld(x), F.fmul(f64(0x29430)), F.fcos(), F.fld1(), F.fsubrp(1), F.fmul(f64(0x29438));
-}
-
-// 1C746h: max(cos X, 0), as a float
-void Tunnel::cosPos(float x) {
-    F.fld(x), F.fcos();
-    F.fldz();
-    F.fxch();
-    const float c = F.fstpf();
-    F.fld(F.fcomp(c).ja() ? 0.0f : c);
-}
-
-// 1C5CBh: a tunnel into the grid: for each point its angle (u, P4 + the
-// angle in 256ths), depth (v, P5 + P2 / r), light; the walls waving by P6
-// at a phase P3, P1 the angle's twist.
-void Tunnel::tunnel(uint32_t grid, float p1, float p2, float p3, int32_t p4, int32_t p5, float p6) {
+// 1C5CBh: a tunnel into the grid. For each point, with (dx, dy) its place
+// from the screen's centre (20.5, 12.5) and r its distance:
+// - u: its angle in 256ths (times 4096), plus U0;
+// - v: the depth, ZOOM / r (times 4096), plus V0;
+// - the light: 262144 - 0.4 ZOOM / r (times 4096), held to 1000h-3F000h,
+//   the far end dark;
+// and r waves with the angle: times 1 + sin(angle * TWIST + PHASE) * WAVE,
+// the water on the walls.
+void Tunnel::tunnel(float twist, float zoom, float phase, int32_t u0, int32_t v0, float wave) {
     info_.tunnel = true;
-    info_.twist = p1, info_.zoom = p2, info_.phase = p3, info_.wave = p6;
-    info_.u0 = p4 / 4096.0f, info_.v0 = p5 / 4096.0f;
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    F.fld(p2), F.fmul(D(0x293EC));
-    F.fld(p1), F.fldst(0), F.fmul(D(0x293F4));
-    F.fxch(2);
-    const float f10 = F.fstpf();
-    F.fxch(), F.fstp(1);
-    p1 = F.fstpf();
-    uint32_t edx = grid;
-    for (int32_t y = 0; y <= 0x19; y++) {
-        for (int32_t x = 0; x <= 0x28; x++) {
-            F.fld((X)y);
-            double d24 = F.fstd();
-            F.fadd(D(0x2940C));
-            F.fld((X)x);
-            double d2c = F.fstd();
-            F.fadd(D(0x29414));
-            F.fpatan();
-            F.fmul(D(0x293FC)), F.fdiv(D(0x2941C)), F.fadd(D(0x29424)), F.fmul(D(0x29404));
-            F.frndint();
-            const int32_t ang = F.fist();
-            F.fmul(p1), F.fadd(p3), F.fsin(), F.fmul(p6);
-            F.fld(d2c);
-            F.fld1();
-            F.faddp(2);
-            F.fadd(D(0x29414));
-            F.fxch();
-            d2c = F.fstpd();
-            F.fmulst(0);
-            F.fld(d24), F.fadd(D(0x2940C));
-            F.fxch();
-            d24 = F.fstpd();
-            F.fmulst(0);
-            F.fadd(d24);
-            F.fsqrt();
-            F.fdivr(D(0x29404));
-            F.fmul(d2c);
-            F.fld(p2), F.fmulst(1);
-            F.fld(f10);
-            F.fmulp(2);
-            w32(edx, (uint32_t)(p4 + ang));
-            edx += 4;
-            F.frndint();
-            F.fxch(), F.fsubr(f32(0x2942C));
-            F.fxch();
-            const int32_t dv = F.fistp();
-            F.frndint();
-            const int32_t l = F.fistp();
-            w32(edx, (uint32_t)(p5 + dv));
-            edx += 4;
-            w32(edx, (uint32_t)(l >= 0x1000 ? (l < 0x3F000 ? l : 0x3F000) : 0x1000));
-            edx += 4;
+    info_.twist = twist, info_.zoom = zoom, info_.phase = phase, info_.wave = wave;
+    info_.u0 = u0 / 4096.0f, info_.v0 = v0 / 4096.0f;
+    const float dim = (float)(X(zoom) * 0.4);
+    const float turns = (float)(X(twist) * 5.992112452678286e-06);   // per angle unit: 2 pi / (256 * 4096)
+    for (int y = 0; y <= 25; y++)
+        for (int x = 0; x <= 40; x++) {
+            const X dx = X(x) + -20.5, dy = X(y) + -12.5;
+            const X ang = std::nearbyint((std::atan2(dy, dx) * 256.0 / 6.283185307179586 + 128.0) * 4096.0);
+            const double swell = (double)(std::sin(ang * turns + phase) * wave + 1);
+            const double dx2 = (double)(dx * dx);
+            const X m = 4096.0 / std::sqrt(dy * dy + dx2) * swell;
+            Point& p = grid_[y * kGridW + x];
+            p.u = (uint32_t)(u0 + (int32_t)std::lrint(ang));
+            p.v = (uint32_t)(v0 + (int32_t)std::lrint(X(zoom) * m));
+            const int32_t l = (int32_t)std::lrint(262144.0f - m * dim);
+            p.light = (uint32_t)std::clamp(l, 0x1000, 0x3F000);
         }
+}
+
+// 150BEh: grid = grid * WA + plane * WB (WA + WB = 4096: the 16.16 values
+// to 8.24)
+void Tunnel::blend(int32_t wa, int32_t wb) {
+    for (size_t i = 0; i < grid_.size(); i++) {
+        Point& p = grid_[i];
+        const Point& q = plane_[i];
+        p.u = p.u * (uint32_t)wa + q.u * (uint32_t)wb;
+        p.v = p.v * (uint32_t)wa + q.v * (uint32_t)wb;
+        p.light = p.light * (uint32_t)wa + q.light * (uint32_t)wb;
     }
 }
 
-// 150BEh: DST = A * a + B * b (3198 dwords)
-void Tunnel::blend(uint32_t dst, uint32_t a, uint32_t b, int32_t wa, int32_t wb) {
-    for (uint32_t i = 0; i < 0xC7E; i++)
-        w32(dst + 4 * i, r32(a + 4 * i) * (uint32_t)wa + r32(b + 4 * i) * (uint32_t)wb);
-}
-
-// 1CB2Bh: three bubbles rising through the plane (T scaling their radii):
-// each pushes the points around it outwards (by sin of the distance inside
-// it), lit by its cosine.
-void Tunnel::bubbles(uint32_t grid, float t) {
+// 1CB2Bh: the drops. Three rings, centred at (20, 12), (10, 7) and (27, 9),
+// the radius 8 cells per T, the second and third 10 and 18 cells behind
+// (T 1.25 and 2.25). For a point inside a ring, at A = distance - radius
+// (A < 0), with a strength S growing to the ring's front:
+// - it is pushed out from the centre by sin(A) * S times its distance;
+// - the light rises by max(cos A, 0) * S * 50 over the base 3F000h.
+// The first: S = 8 * 2048 / (8 - A); the others 2730.67 * 4 / (4 - A).
+void Tunnel::bubbles(float t) {
     info_.drops = true;
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    auto Fl = [&](uint32_t a) { return (X)f32(a); };
-    F.fld(t), F.fmul(Fl(0x294C0));
-    const float r0 = F.fstpf();
-    int32_t y1 = -12, y2 = -7, y3 = -9;
-    uint32_t row = grid;
-    for (int32_t gy = 0; gy != 0xD0000; gy += 0x8000, row += 0x1EC, y1++, y2++, y3++) {
-        uint32_t edx = row;
-        int32_t x1 = -20, x2 = -10, x3 = -27, gx = 0;
-        do {
-            // the distance into each: A (zero outside), its strength S
-            auto dist = [&](int32_t d2) {
-                F.fld(r0);
-                const double dr = F.fstpd();
-                F.fld((X)d2), F.fsqrt(), F.fsub(dr);
-            };
-            dist(x1 * x1 + y1 * y1);
-            F.fld(Fl(0x294C0)), F.fldst(0), F.fxch(2);
-            float a1 = F.fstpf();
-            F.fxch(), F.fsub(a1), F.fdivr(Fl(0x29590)), F.fmulp(1);
-            F.fldz(), F.fxch();
-            float s1 = F.fstpf();
-            if (F.fcomp(a1).jb()) s1 = 0, a1 = 0;
-            float a[2], s[2];
-            const int32_t d2[2] = {x2 * x2 + y2 * y2, x3 * x3 + y3 * y3};
-            const uint32_t off[2] = {0x29594, 0x2959C};
-            for (int k = 0; k < 2; k++) {
-                dist(d2[k]);
-                F.fadd(D(off[k]));
-                F.fld(Fl(0x294C8)), F.fxch();
-                a[k] = F.fstpf();
-                F.fsub(a[k]), F.fdivr(D(0x29534)), F.fmul(D(0x294CC));
-                F.fldz(), F.fxch();
-                s[k] = F.fstpf();
-                if (F.fcomp(a[k]).jb()) s[k] = 0, a[k] = 0;
-            }
-            const float a2 = a[0], s2 = s[0], a3 = a[1], s3 = s[1];
-            F.fld(a1), F.fsin(), F.fmul(s1);
-            F.fld(a2), F.fxch();
-            const float g1 = F.fstpf();
-            F.fsin(), F.fmul(s2);
-            F.fld(a3), F.fxch();
-            const float g2 = F.fstpf();
-            F.fsin();
-            F.fld((X)x1), F.fmul(g1);
-            F.fld((X)y1), F.fmul(g1);
-            F.fld(s1), F.fmul(Fl(0x294C4));
-            F.fld(s3), F.fmulp(4);
-            F.fld((X)gy), F.fld((X)gx);
-            F.faddp(4), F.faddp(2);
-            F.fld((X)x2), F.fmul(g2);
-            F.fld((X)y2), F.fmul(g2);
-            F.fxch(), F.faddp(4), F.faddp(2);
-            F.fld((X)x3), F.fmulst(4);
-            F.fld((X)y3), F.fmulp(5);
-            F.faddp(3);
-            F.fxch(3), F.faddp(1);
-            F.fxch(), F.frndint(), F.fxch(), F.frndint(), F.fxch();
-            w32(edx, (uint32_t)F.fistp());
-            w32(edx + 4, (uint32_t)F.fistp());
-            float t2 = F.fstpf();
-            cosPos(a1), F.fmul(t2);
-            F.fld(s2), F.fmul(Fl(0x294C4));
-            F.fxch();
-            float t7e = F.fstpf();
-            t2 = F.fstpf();
-            cosPos(a2), F.fmul(t2);
-            F.fld(s3), F.fmul(Fl(0x294C4));
-            F.fld(t7e), F.fadd(Fl(0x2958C));
-            F.faddp(2);
-            t7e = F.fstpf();
-            t2 = F.fstpf();
-            cosPos(a3), F.fmul(t7e);
-            F.fadd(t2);
-            x1++, gx += 0x8000, x2++, x3++;
-            edx += 12;
-            F.frndint();
-            w32(edx - 4, (uint32_t)F.fistp());
-        } while (gx != 0x148000);
-    }
+    const float radius = (float)(X(t) * 8.0f);
+    struct Ring {
+        float a = 0, s = 0;     // A, S (0 outside the ring)
+    };
+    auto first = [&](int dx, int dy) {
+        Ring r;
+        r.a = (float)(std::sqrt(X(dx * dx + dy * dy)) - X(radius));
+        r.s = (float)(X(8.0f) * (X(2048.0f) / (X(8.0f) - r.a)));
+        return 0 < r.a ? Ring{} : r;
+    };
+    auto later = [&](int dx, int dy, double behind) {
+        Ring r;
+        r.a = (float)(std::sqrt(X(dx * dx + dy * dy)) - X(radius) + behind);
+        r.s = (float)(X(2730.666666666666) / (X(4.0f) - r.a) * 4.0);
+        return 0 < r.a ? Ring{} : r;
+    };
+    for (int gy = 0; gy < kGridH; gy++)
+        for (int gx = 0; gx < kGridW; gx++) {
+            const int x1 = gx - 20, y1 = gy - 12, x2 = gx - 10, y2 = gy - 7, x3 = gx - 27, y3 = gy - 9;
+            const Ring r1 = first(x1, y1), r2 = later(x2, y2, 10.0), r3 = later(x3, y3, 18.0);
+            const float g1 = (float)(std::sin(X(r1.a)) * r1.s);
+            const float g2 = (float)(std::sin(X(r2.a)) * r2.s);
+            const X g3 = std::sin(X(r3.a)) * r3.s;
+            const X u = X(x1) * g1 + gx * 0x8000 + X(x2) * g2 + X(x3) * g3;
+            const X v = X(y1) * g1 + gy * 0x8000 + X(y2) * g2 + X(y3) * g3;
+            // the light, summed through floats
+            const float l1 = (float)(X(cosPos(r1.a)) * (float)(X(r1.s) * 50.0f));
+            const float l12 = (float)(X(cosPos(r2.a)) * (float)(X(r2.s) * 50.0f) + (X(l1) + 258048.0f));
+            const X light = X(cosPos(r3.a)) * (float)(X(r3.s) * 50.0f) + l12;
+            grid_[gy * kGridW + gx] = {(uint32_t)std::lrint(u), (uint32_t)std::lrint(v), (uint32_t)std::lrint(light)};
+        }
 }
 
-// 1CDF8h: the plane waving (three sines, strengths K1-K3 growing with T)
-// and twisting, a ring of light moving out from the centre; into the
-// second grid (+31F8h).
-void Tunnel::wobble(uint32_t grid, float t) {
+// 1CDF8h: the plane, into plane_. The grid turned by U/2 (U = T - 8), then
+// pulled by three sines, each of one coordinate along the other, their
+// strengths K1-K3 growing with T; a ring moving out from the centre at 8
+// cells per U pushes the points inside it outwards. The light stays 3F000h.
+void Tunnel::wobble(float t) {
     info_.plane = true;
-    auto D = [&](uint32_t a) { return (X)f64(a); };
-    auto Fl = [&](uint32_t a) { return (X)f32(a); };
-    auto bits = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
-    F.fld(t), F.fadd(Fl(0x2950C));
-    const float u = F.fstf();
-    F.fmul(Fl(0x294D4));
-    float k1 = F.fstf();
-    if (F.fcomp(D(0x294EC)).ja()) k1 = 0.5f;
-    F.fld(u), F.fadd(Fl(0x2953C)), F.fmul(Fl(0x294D8));
-    float k2 = F.fstf();
-    if (F.fcomp(D(0x295A4)).ja()) k2 = bits(0x3EA8F5C3);
-    if (F.fldz(), F.fcomp(k2).ja()) k2 = 0;
-    F.fld(u), F.fadd(Fl(0x295AC)), F.fmul(Fl(0x294D8));
-    float k3 = F.fstf();
-    if (F.fcomp(D(0x2948C)).ja()) k3 = bits(0x3E4CCCCD);
-    if (F.fldz(), F.fcomp(k3).ja()) k3 = 0;
-    F.fld(u), F.fldst(0), F.fmul(Fl(0x294C0));
-    F.fldst(1), F.fmul(Fl(0x29470));
-    F.fxch(2), F.fmul(Fl(0x294DC));
-    F.fxch();
-    const float p = F.fstpf();
-    F.fxch();
-    const float ph = F.fstpf();
-    const float q = F.fstpf();
-    uint32_t row = grid;
-    for (int32_t y = -12, ys = -4, yc = 4; y != 14; y++, ys++, yc++, row += 0x1EC) {
-        uint32_t edx = row;
-        for (int32_t x = -20, xs = -4, xc = 4; x != 21; x++, xs++, xc++, edx += 12) {
-            F.fld(ph), F.fcos();
-            F.fld(ph), F.fxch();
-            const float cph = F.fstpf();
-            F.fsin();
-            F.fld((X)ys), F.fmul(cph);
-            F.fld((X)xc), F.fmul(cph);
-            F.fld((X)xs), F.fmulst(3);
-            F.fld((X)yc);
-            F.fxch(), F.faddp(3), F.fmulp(3);
-            F.fxch();
-            float py = F.fstf();
-            F.fmul(Fl(0x294E0));
-            F.fxch(2), F.fsubp(1);
-            F.fxch(), F.fadd(u);
-            F.fxch();
-            float px = F.fstpf();
-            F.fsin(), F.fmul(k1), F.fld1(), F.faddp(), F.fmul(px);
-            px = F.fstf();
-            F.fmul(Fl(0x294A4)), F.fadd(ph), F.fsin(), F.fmul(k2), F.fld1(), F.faddp(), F.fmul(py);
-            py = F.fstf();
-            F.fmul(Fl(0x294DC)), F.fadd(q), F.fsin(), F.fmul(k3), F.fld1(), F.faddp();
-            F.fld(px), F.fxch(), F.fmulst(1);
-            F.fld(Fl(0x294C0));
-            F.fld(py), F.fmulst(1);
-            F.fxch(2), F.fstp(3);
-            F.fxch(2);
-            px = F.fstf();
-            F.fmulp(2);
-            F.fld(Fl(0x29460));
-            F.fxch(), F.fmulst(1);
-            F.fxch(2), F.fmulp(1);
-            F.fxch(), F.frndint(), F.fxch(), F.frndint();
-            w32(edx + 0x31F8, (uint32_t)F.fistp());
-            w32(edx + 0x31FC, (uint32_t)F.fistp());
-            F.fld(p);
-            const double dp = F.fstpd();
-            w32(edx + 0x3200, 0x3F000);
-            F.fld((X)(x * x + y * y)), F.fsqrt(), F.fsub(dp), F.fadd(D(0x29540));
-            F.fldz(), F.fxch();
-            const float z = F.fstpf();
-            if (!F.fcomp(z).ja()) continue;
-            if (F.fld(z), !F.fcomp(D(0x295B0)).ja()) continue;
-            // inside the ring: pushed outwards
-            F.fld(z), F.fsin(), F.fmul(D(0x294E4));
-            F.fld(px), F.fmulst(1);
-            F.fld(py), F.fmulp(2);
-            F.fld((X)(int32_t)r32(edx + 0x31F8));
-            F.fld((X)(int32_t)r32(edx + 0x31FC));
-            F.fxch(2), F.faddst(1);
-            F.fxch(3), F.faddst(2);
-            F.fxch(3), F.fstp(1);
-            F.fxch(2), F.fstp(1);
-            F.fxch(), F.frndint(), F.fxch(), F.frndint(), F.fxch();
-            w32(edx + 0x31F8, (uint32_t)F.fistp());
-            w32(edx + 0x31FC, (uint32_t)F.fistp());
+    const float u = (float)(X(t) + -8.0f);
+    const X k1x = X(u) * 0.1f;
+    float k1 = (float)k1x;
+    if (k1x > 0.5) k1 = 0.5f;
+    const X k2x = (X(u) + -10.0f) * 0.05f;
+    float k2 = (float)k2x;
+    if (k2x > 0.33) k2 = 0.33f;
+    if (0 > k2) k2 = 0;
+    const X k3x = (X(u) + -15.0f) * 0.05f;
+    float k3 = (float)k3x;
+    if (k3x > 0.2) k3 = 0.2f;
+    if (0 > k3) k3 = 0;
+    const float radius = (float)(X(u) * 8.0f);
+    const float ph = (float)(X(u) * 0.5f);
+    const float q = (float)(X(u) * 0.333333343f);
+    const float cph = (float)std::cos(X(ph));
+    const X sph = std::sin(X(ph));
+    for (int y = -12; y <= 13; y++)
+        for (int x = -20; x <= 20; x++) {
+            const int xs = x + 16, ys = y + 8, xc = x + 24, yc = y + 16;
+            const X ty = X(ys) * cph + X(xs) * sph;
+            const X tx = X(xc) * cph - sph * X(yc);
+            const X wx = (std::sin(ty * 0.166666672f + u) * k1 + 1) * (float)tx;
+            const X wy = (std::sin(wx * 0.25f + ph) * k2 + 1) * (float)ty;
+            const X wx2 = (std::sin(wy * 0.333333343f + q) * k3 + 1) * (float)wx;
+            const float px = (float)wx2, py = (float)wy;
+            int32_t pu = (int32_t)std::lrint(wx2 * 8.0f * 4096.0f);
+            int32_t pv = (int32_t)std::lrint(X(py) * 8.0f * 4096.0f);
+            // the ring
+            const float z = (float)(std::sqrt(X(x * x + y * y)) - X(radius) + 15.0);
+            if (0 > z && z > -37.69911184307752) {   // -12 pi
+                const X w = std::sin(X(z)) * 4096.0;
+                const X ru = px * w + X(pu), rv = w * py + X(pv);
+                pu = (int32_t)std::lrint(ru), pv = (int32_t)std::lrint(rv);
+            }
+            plane_[(y + 12) * kGridW + x + 20] = {(uint32_t)pu, (uint32_t)pv, 0x3F000};
         }
-    }
 }
 
 }  // namespace tunnel
